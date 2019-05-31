@@ -1,0 +1,9 @@
+#!/bin/bash
+
+#SBATCH --job-name=mpi --nodes=4 --ntasks-per-node=4
+#SBATCH --partition=release
+#SBATCH --output=stdout
+
+export MV2_ENABLE_AFFINITY=0
+
+mpiexec ./rmacoll
