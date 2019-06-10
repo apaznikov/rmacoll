@@ -6,7 +6,8 @@ INCLUDE_PATH=./
 
 CXX=mpicxx
 CXXFLAGS=-Wall -I$(INCLUDE_PATH) -pthread \
-		 -lboost_system -lboost_date_time -lboost_thread
+		 -lboost_system -lboost_date_time -lboost_thread \
+		 -L/usr/lib64
 
 all: $(PROG)
 
@@ -19,3 +20,5 @@ $(PROG): $(PROG_OBJ)
 clean:
 	rm -rf $(PROG) $(PROG_OBJ) 
 	rm -rf stdout
+	rm mpi*.o*
+	rm stdout

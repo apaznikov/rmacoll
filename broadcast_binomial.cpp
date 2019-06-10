@@ -19,7 +19,19 @@ template <typename T>
 static void printbin(T val)
 {
     std::bitset<sizeof(val) * 8> bits(val);
-    std::cout << bits << std::endl;
+    std::cout << "mask\t" << bits << std::endl;
+}
+
+// comp_srank: Compute rank relative to root
+int comp_srank(int myrank, int root, int nproc)
+{
+    return (myrank - root + nproc) % nproc;
+}
+
+// comp_rank: Compute rank from srank
+int comp_rank(int srank, int root, int nproc)
+{
+    return (srank + root) % nproc;
 }
 
 // RMA_Bcast_binomial: Binomial tree broadcast
@@ -33,45 +45,50 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
     MPI_Comm_rank(comm, &myrank);
     MPI_Comm_size(comm, &nproc);
     
-    if (myrank == 0) {
+    auto sp = waiter_wp.lock();
 
-        auto mask = 1;
+    if (!sp) {
+        std::cerr << "waiter_wp is expired" << std::endl;
+        return RET_CODE_ERROR;
+    }
 
-        while (mask < nproc) {
-            std::cout << "\t mask\t";
-            printbin(mask);
-            mask = mask << 1;
-        }
+    auto &winguard = sp->get_winguard();
+    auto &req_raw_win = winguard.get_win();
+    auto req_ptr = winguard.get_sptr();
 
-        // decltype(auto) winguard = waiter.get_winguard();
+    // auto winguard = waiter_wp.lock()->get_winguard();
+    // auto req_win = sp->get_winguard().get_win();
+    // auto req_ptr = sp->get_winguard().get_sptr();
 
-        auto sp = waiter_wp.lock();
+    // RMA_Lock_guard lock_all_waiters(req_raw_win);
 
-        if (!sp) {
-            std::cerr << "waiter_wp is expired" << std::endl;
-            return RET_CODE_ERROR;
-        }
+    auto mask = 1;
 
-        // decltype(auto) winguard = sp->get_winguard();
-        // decltype(auto) req_win = winguard.get_win();
-        // decltype(auto) req_ptr = winguard.get_sptr();
-        
-        auto &winguard = sp->get_winguard();
-        auto &req_win = winguard.get_win();
-        auto req_ptr = winguard.get_sptr();
+    while (mask < nproc) {
+        printbin(mask);
 
-        // auto winguard = waiter_wp.lock()->get_winguard();
+        // Put data to ranks in which current bit is not set
+        auto rank_put = comp_rank(mask, myrank, nproc);
+        std::cout << " rank_put2 " << rank_put << std::endl;
 
-        // auto req_win = sp->get_winguard().get_win();
-        // auto req_ptr = sp->get_winguard().get_sptr();
+        // Prepare request
+        req_t req;
+        req.buf = *((int*) origin_addr);
+        req.op = req_t::op_t::bcast;
+        req.root = myrank;
+        auto count = sizeof(req_t);
 
-        auto orig_req = 1;
+        // Atomic put to request on remote process
+        MPI_Accumulate(&req, count, MPI_BYTE, rank_put, 0, count, MPI_BYTE,
+                       MPI_REPLACE, req_raw_win);
 
-        RMA_Lock_guard lock_all_waiters(req_win);
-    
-        for (auto rank = 0; rank < nproc; rank++) {
-            MPI_Put(&orig_req, 1, MPI_INT, rank, <CHANGE TO DISP>, 1, MPI_INT, req_win);
-        }
+        MPI_Win_flush(rank_put, req_raw_win);
+
+        // MPI_Put(&req, count, MPI_BYTE, rank_put, 0, count, MPI_BYTE, req_win);
+
+        // MPI_Put(&op, 1, MPI_INT, rank_put, offset_op, 1, MPI_INT, req_win);
+
+        mask = mask << 1;
     }
 
     return RET_CODE_SUCCESS;
@@ -85,30 +102,66 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
 void waiter_c::waiter_loop()
 {
     // std::cout << "hello0" << std::endl;
-    
-    auto req_ptr = req_win.get_sptr();
-    req_ptr->op = 0;
-    req_ptr->root = 0;
+    auto req_sptr = req_win.get_sptr();
+    req_sptr->op = req_t::noop;
+    req_sptr->root = 0;
+    auto &req_raw_win = req_win.get_win();
 
     while (waiter_term_flag == false) {
         // std::cout << myrank << " hello " << i++ << std::endl;
+        // std::cout << myrank << " op " << req_ptr->op << std::endl;
 
-        // 
         // 1. Check request field
-        //
 
-        if (req_ptr->op == 1) {
-            std::cout << myrank << "\t I GOT IT!" << *req_ptr << std::endl;
-            *req_ptr = 0;
+        // Devide quering of req devide by lurking (common load) 
+        // and attack (get_acc) phases
 
-            // Compute rank relative to root
-            // auto srand = (myrank - root +p) % p;
+        if (myrank == 0)
+            continue;
+
+        req_t req_read;
+        req_read.op = req_t::op_t::noop;
+        auto count = sizeof(req_t);
+
+        // // Atomically read request field in my memory
+        MPI_Get_accumulate(req_sptr.get(), count, MPI_BYTE, &req_read, count, 
+                           MPI_BYTE, myrank, 0, count, MPI_BYTE, MPI_NO_OP, 
+                           req_raw_win);
+
+        MPI_Win_flush(myrank, req_raw_win);
+
+        if (req_read.op == req_t::op_t::bcast) {
+            std::cout << myrank << "\t I GOT IT! op = " << req_sptr->op 
+                      << " buf " << req_sptr->buf 
+                      << " root " << req_sptr->root << std::endl;
+
+            auto root = req_sptr->root;
+            // auto buf = req_sptr->buf;
+
+            req_sptr->op = req_t::op_t::noop;
+
+            auto srank = comp_srank(myrank, req_sptr->root, nproc);
+            std::cout << myrank << " my srank: " << srank << std::endl;
 
             auto mask = 1;
 
             while (mask < nproc) {
-                std::cout << "\t mask\t";
-                printbin(mask);
+                if ((srank & mask) == 0) {
+                    // Put (send) data if bit is not set
+                    auto put_rank = srank | mask;
+                    if (put_rank < nproc) {
+                        // std::cout << myrank << "\t1 put to " << put_rank << std::endl;
+                        put_rank = comp_rank(put_rank, root, nproc);
+                        std::cout << myrank << "\tput to " << put_rank << std::endl;
+                    }
+                } else {
+                    // Get (recv) data if bit is set
+                    auto get_rank = srank & (~mask);
+                    get_rank = comp_rank(get_rank, root, nproc);
+                    std::cout << myrank << "\tget from " << get_rank << std::endl;
+                    break;
+                }
+
                 mask = mask << 1;
             }
         }
