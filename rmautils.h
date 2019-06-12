@@ -9,10 +9,18 @@
 #include <iostream>
 #include <functional>
 #include <memory>
+#include <map>
+#include <mutex>
 
 #include <mpi.h>
 
 extern int myrank;
+
+using win_id_t = unsigned int;
+
+extern std::map<win_id_t, MPI_Win> winlist;
+
+extern std::mutex winlock;
 
 // RMA_Lock_guard: RAII implementation of MPI_Win_lock/MPI_Win_unlock
 class RMA_Lock_guard
@@ -85,6 +93,9 @@ public:
 
         ptr = std::move(std::shared_ptr<T>(raw_ptr, 
                     [this](auto ptr) { ptr_deleter(ptr); }));
+
+        add_to_list();
+
         is_init = true;
     }
 
@@ -93,6 +104,9 @@ public:
     {
         MPI_Win_create(buf, count * sizeof(T), disp_unit, MPI_INFO_NULL,
                        comm, &win);
+
+        add_to_list();
+
         is_init = true;
     }
 
@@ -110,8 +124,15 @@ public:
 
     ~RMA_Win_guard()
     {
+        std::lock_guard<std::mutex> lock(winlock);
+
+        remove_from_list();
+        free();
+    }
+
+    void free()
+    {
         if (is_init) {
-            // std::cerr << myrank << " ~RMA_Win_guard()" << std::endl;
             MPI_Win_free(&win);
         }
     }
@@ -146,8 +167,33 @@ private:
     std::shared_ptr<T> ptr;
     MPI_Win win;
 
+    // ID for list of windows
+    win_id_t id;
+    static win_id_t last_id;
+
     bool is_init = false;
    
     // Unit for displacements (1 byte)
     const int disp_unit = 1;
+
+    // Add to the list of RMA windows
+    void add_to_list()
+    {
+        std::lock_guard<std::mutex> lock(winlock);
+
+        id = last_id;
+        last_id++;
+        winlist.insert(std::pair<win_id_t, MPI_Win>(id, win)); 
+    }
+
+    // Remove from the list of RMA windows
+    void remove_from_list()
+    {
+        std::lock_guard<std::mutex> lock(winlock);
+
+        winlist.erase(id);
+    }
 };
+
+template <typename T>
+win_id_t RMA_Win_guard<T>::last_id = 0;

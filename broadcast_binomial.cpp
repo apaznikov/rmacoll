@@ -148,14 +148,17 @@ void waiter_c::waiter_loop()
                         put_rank = comp_rank(put_rank, root, nproc);
                         put_request(req_read, put_rank, req_raw_win);
                         std::cout << myrank << "\tput to " << put_rank << std::endl;
+
+                        // Copy to local memory
                     }
-                } else {
-                    // Get (recv) data if bit is set
-                    auto get_rank = srank & (~mask);
-                    get_rank = comp_rank(get_rank, root, nproc);
-                    std::cout << myrank << "\tget from " << get_rank << std::endl;
-                    break;
-                }
+                } 
+                // else {
+                //     // Get (recv) data if bit is set
+                //     auto get_rank = srank & (~mask);
+                //     get_rank = comp_rank(get_rank, root, nproc);
+                //     std::cout << myrank << "\tget from " << get_rank << std::endl;
+                //     break;
+                // }
 
                 mask = mask << 1;
             }

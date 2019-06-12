@@ -1,6 +1,6 @@
 PROG=rmacoll
 
-PROG_OBJ=$(PROG).o rmautils.o broadcast_linear.o broadcast_binomial.o
+PROG_OBJ=$(PROG).o broadcast_linear.o broadcast_binomial.o rmautils.o 
 
 INCLUDE_PATH=./
 
@@ -20,5 +20,5 @@ $(PROG): $(PROG_OBJ)
 clean:
 	rm -rf $(PROG) $(PROG_OBJ) 
 	rm -rf stdout
-	rm mpi*.o*
-	rm stdout
+	rm -rf stdout
+	rm -rf mpitask.o*

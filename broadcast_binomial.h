@@ -39,6 +39,9 @@ struct req_t {
     
     // Root (for collectives with root)
     int root;       
+
+    // RMA window for collective
+    MPI_Win win;
 };
 
 const auto req_size = sizeof(req_t);

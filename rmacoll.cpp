@@ -36,29 +36,26 @@ void test_rmacoll(decltype(RMA_Bcast) bcast_func, MPI_Comm comm)
     int myrank, nproc;
     MPI_Comm_rank(comm, &myrank);
     MPI_Comm_size(comm, &nproc);
-
+    
     // Number of variables in window
     const auto count = 1;           
 
-    RMA_Win_guard<int> win(count, comm);
-    {
-        auto ptr = win.get_ptr();
-        *ptr = (myrank + 1) * 10;
+    RMA_Win_guard<int> scoped_win(count, MPI_COMM_WORLD);
 
-        std::cout << myrank << "\t" << "BEFORE\t" << *ptr << std::endl;
-        MPI_Barrier(MPI_COMM_WORLD);
+    auto ptr = scoped_win.get_ptr();
+    *ptr = (myrank + 1) * 10;
 
-        if (myrank == 0) {
-            // RMA_Lock_guard lock_all(win.get_win());
-            
-            bcast_func(ptr, count, MPI_INT, 0, 
-                       count, MPI_INT, win.get_win(), MPI_COMM_WORLD);
-        }
+    std::cout << myrank << "\t" << "BEFORE\t" << *ptr << std::endl;
+    MPI_Barrier(MPI_COMM_WORLD);
 
-        MPI_Barrier(MPI_COMM_WORLD);
-
-        std::cout << myrank << "\t" << "AFTER\t" << *ptr << std::endl;
+    if (myrank == 0) {
+        bcast_func(ptr, count, MPI_INT, 0, 
+                   count, MPI_INT, scoped_win.get_win(), MPI_COMM_WORLD);
     }
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    std::cout << myrank << "\t" << "AFTER\t" << *ptr << std::endl;
 }
 
 int main(int argc, char *argv[]) 
