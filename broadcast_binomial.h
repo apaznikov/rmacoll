@@ -18,6 +18,8 @@
 #include "rmacoll.h"
 #include "rmautils.h"
 
+const auto waiter_timeout = 1000;
+
 extern int myrank;
 extern int nproc;
 
@@ -38,6 +40,8 @@ struct req_t {
     // Root (for collectives with root)
     int root;       
 };
+
+const auto req_size = sizeof(req_t);
 
 // Offsets for RMA operations
 const MPI_Aint offset_buf = offsetof(req_t, buf);

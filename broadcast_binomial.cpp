@@ -34,6 +34,14 @@ int comp_rank(int srank, int root, int nproc)
     return (srank + root) % nproc;
 }
 
+static void put_request(req_t &req, int rank, const MPI_Win &win)
+{
+    MPI_Accumulate(&req, req_size, MPI_BYTE, rank, 0, req_size, MPI_BYTE, 
+                   MPI_REPLACE, win);
+
+    MPI_Win_flush(rank, win);
+}
+
 // RMA_Bcast_binomial: Binomial tree broadcast
 int RMA_Bcast_binomial(const void *origin_addr, int origin_count, 
                        MPI_Datatype origin_datatype, MPI_Aint target_disp,
@@ -56,12 +64,6 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
     auto &req_raw_win = winguard.get_win();
     auto req_ptr = winguard.get_sptr();
 
-    // auto winguard = waiter_wp.lock()->get_winguard();
-    // auto req_win = sp->get_winguard().get_win();
-    // auto req_ptr = sp->get_winguard().get_sptr();
-
-    // RMA_Lock_guard lock_all_waiters(req_raw_win);
-
     auto mask = 1;
 
     while (mask < nproc) {
@@ -76,17 +78,9 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
         req.buf = *((int*) origin_addr);
         req.op = req_t::op_t::bcast;
         req.root = myrank;
-        auto count = sizeof(req_t);
 
         // Atomic put to request on remote process
-        MPI_Accumulate(&req, count, MPI_BYTE, rank_put, 0, count, MPI_BYTE,
-                       MPI_REPLACE, req_raw_win);
-
-        MPI_Win_flush(rank_put, req_raw_win);
-
-        // MPI_Put(&req, count, MPI_BYTE, rank_put, 0, count, MPI_BYTE, req_win);
-
-        // MPI_Put(&op, 1, MPI_INT, rank_put, offset_op, 1, MPI_INT, req_win);
+        put_request(req, rank_put, req_raw_win);
 
         mask = mask << 1;
     }
@@ -123,8 +117,9 @@ void waiter_c::waiter_loop()
         req_read.op = req_t::op_t::noop;
         auto count = sizeof(req_t);
 
-        // // Atomically read request field in my memory
-        MPI_Get_accumulate(req_sptr.get(), count, MPI_BYTE, &req_read, count, 
+        // Atomically read request field in my memory
+        MPI_Get_accumulate(NULL, 0, MPI_BYTE, 
+                           &req_read, count, 
                            MPI_BYTE, myrank, 0, count, MPI_BYTE, MPI_NO_OP, 
                            req_raw_win);
 
@@ -147,11 +142,11 @@ void waiter_c::waiter_loop()
 
             while (mask < nproc) {
                 if ((srank & mask) == 0) {
-                    // Put (send) data if bit is not set
+                    // Put (send) data to the next process if bit is not set
                     auto put_rank = srank | mask;
                     if (put_rank < nproc) {
-                        // std::cout << myrank << "\t1 put to " << put_rank << std::endl;
                         put_rank = comp_rank(put_rank, root, nproc);
+                        put_request(req_read, put_rank, req_raw_win);
                         std::cout << myrank << "\tput to " << put_rank << std::endl;
                     }
                 } else {
@@ -166,6 +161,6 @@ void waiter_c::waiter_loop()
             }
         }
 
-        usleep(1000);
+        usleep(waiter_timeout);
     }
 }

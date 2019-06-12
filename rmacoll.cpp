@@ -61,34 +61,6 @@ void test_rmacoll(decltype(RMA_Bcast) bcast_func, MPI_Comm comm)
     }
 }
 
-// // RMA_test: for test
-// // TODO remove
-// void RMA_test()
-// {
-//     // Number of variables in window
-//     const auto count = 1;           
-//     const auto target_rank = 1;
-//     int readval = 0;
-// 
-//     RMA_Win_guard<int> win(count);
-//     {
-//         auto *ptr = win.get_ptr();
-// 
-//         RMA_Lock_guard lock(target_rank, win.get_win());
-// 
-//         *ptr = myrank * 10;
-//         std::cout << myrank << ": " << *ptr << std::endl;
-//         MPI_Barrier(MPI_COMM_WORLD);
-// 
-//         MPI_Get(&readval, count, MPI_INT, target_rank, 
-//                 0, count, MPI_INT, win.get_win());
-//     }
-//     
-//     std::cout << myrank << ": read from " << target_rank << " " 
-//               << readval << std::endl;
-// }
-
-
 int main(int argc, char *argv[]) 
 {
     try {
