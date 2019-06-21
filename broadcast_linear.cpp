@@ -14,7 +14,7 @@
 int RMA_Bcast_linear(const void *origin_addr, int origin_count, 
                      MPI_Datatype origin_datatype, MPI_Aint target_disp,
                      int target_count, MPI_Datatype target_datatype,
-                     MPI_Win win, MPI_Comm comm)
+                     MPI_Win win, win_id_t wid, MPI_Comm comm)
 {
     auto myrank = 0, nproc = 0; 
 
