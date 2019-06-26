@@ -165,8 +165,10 @@ void waiter_c::waiter_loop()
 
             // Copy buf to local memory
             // Search for bcast windows id in windows list
-            MPI_Win *bcast_win = nullptr;
-            auto isfound = find_win(req_read.wid, &bcast_win);
+            // MPI_Win *bcast_win = nullptr;
+
+            std::shared_ptr<MPI_Win> bcast_win;
+            auto isfound = find_win(req_read.wid, bcast_win);
 
             if (isfound == false) {
                 std::cerr << "Window " << req_read.wid 

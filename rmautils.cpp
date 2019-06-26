@@ -14,7 +14,8 @@ winlist_t winlist;
 // The last window id to make it unique
 win_id_t last_wid = 0;
 
-bool find_win(win_id_t id, MPI_Win **win)
+// bool find_win(win_id_t id, MPI_Win **win)
+bool find_win(win_id_t id, std::shared_ptr<MPI_Win> &win)
 {
     std::lock_guard<std::mutex> lock(winlock);
 
@@ -28,7 +29,9 @@ bool find_win(win_id_t id, MPI_Win **win)
     auto search = winlist.find(id);
 
     if (search != winlist.end()) {
-        *win = search->second;
+        win = search->second;
+
+        // *win = search->second;
         // std::cout << rank << "R RETURN " << (void*) search->second << std::endl;
         return true;
     } else {
