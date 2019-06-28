@@ -23,7 +23,7 @@ bool find_win(win_id_t id, std::shared_ptr<MPI_Win> &win)
     // MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     // for (auto &elem: winlist) {
     //     std::cout << rank << "R ELEM " << elem.first 
-    //               << " win " << (void*) elem.second << std::endl;
+    //               << " win " << (void*) elem.second.get() << std::endl;
     // }
 
     auto search = winlist.find(id);

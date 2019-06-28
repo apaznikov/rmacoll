@@ -22,13 +22,16 @@ const win_id_t MPI_WIN_NO_ID = -1;
 
 extern win_id_t last_wid;
 
-using winlist_t = std::map<win_id_t, MPI_Win*>;
+// using winlist_t = std::map<win_id_t, MPI_Win*>;
+using winlist_t = std::map<win_id_t, std::shared_ptr<MPI_Win>>;
 extern winlist_t winlist;
 
 extern std::mutex winlock;
 
 // Find window by window's id
-bool find_win(win_id_t id, MPI_Win **win);
+// bool find_win(win_id_t id, MPI_Win **win);
+// bool find_win(win_id_t id, std::shared_ptr<MPI_Win> win);
+bool find_win(win_id_t id, std::shared_ptr<MPI_Win> &win);
 
 // RMA_Lock_guard: RAII implementation of MPI_Win_lock/MPI_Win_unlock
 class RMA_Lock_guard
@@ -106,8 +109,10 @@ class RMA_Win_guard
 {
 public:
     // init: Initialize window: allocate memory and init win
-    void init(unsigned int count, MPI_Comm comm)
+    void init(unsigned int _count, MPI_Comm comm)
     {
+        count = _count;
+
         T *raw_ptr = nullptr;
         const auto bufsize = count * sizeof(T);
 
@@ -116,32 +121,44 @@ public:
         MPI_Win_create(raw_ptr, bufsize, disp_unit, MPI_INFO_NULL,
                        comm, win.get());
 
-        ptr = std::move(std::shared_ptr<T>(raw_ptr, 
+        ptr = std::move(std::shared_ptr<T[]>(raw_ptr, 
                     [this](auto ptr) { ptr_deleter(ptr); }));
 
         add_to_list();
 
         is_init = true;
+        
+        // Wait until window will be added on all procs
+        MPI_Barrier(MPI_COMM_WORLD);
     }
 
     // init: Initialize window: initialize memory in allocated memory
-    void init(T *buf, unsigned int count, MPI_Comm comm)
+    void init(T *buf, unsigned int _count, MPI_Comm comm)
     {
+        count = _count;
+
         MPI_Win_create(buf, count * sizeof(T), disp_unit, MPI_INFO_NULL,
                        comm, win.get());
 
         // Add deleter
-        ptr = std::move(std::shared_ptr<T>(buf, 
+        ptr = std::move(std::shared_ptr<T[]>(buf, 
                     [this](auto ptr) { ptr_deleter(ptr); }));
+
+        // ptr = std::move(std::shared_ptr<T>(buf, 
+        //             [this](auto ptr) { ptr_deleter(ptr); }));
 
         add_to_list();
 
         is_init = true;
+
+        // Wait until window will be added on all procs
+        MPI_Barrier(MPI_COMM_WORLD);
     }
 
     // init: Initialize window: initialize memory in allocated memory
-    void init(std::shared_ptr<T> _ptr, unsigned int count, MPI_Comm comm)
+    void init(std::shared_ptr<T[]> _ptr, unsigned int _count, MPI_Comm comm)
     {
+        count = _count;
         ptr = _ptr;
 
         MPI_Win_create(_ptr.get(), count * sizeof(T), disp_unit, MPI_INFO_NULL,
@@ -150,24 +167,27 @@ public:
         add_to_list();
 
         is_init = true;
+        
+        // Wait until window will be added on all procs
+        MPI_Barrier(MPI_COMM_WORLD);
     }
 
     RMA_Win_guard() { }
 
-    RMA_Win_guard(unsigned int _count, MPI_Comm comm): count(_count)
+    RMA_Win_guard(unsigned int _count, MPI_Comm comm)
     {
-        init(count, comm);
+        init(_count, comm);
     }
 
-    RMA_Win_guard(T *buf, unsigned int _count, MPI_Comm comm): count(_count)
+    RMA_Win_guard(T *buf, unsigned int _count, MPI_Comm comm) 
     {
-        init(buf, count, comm);
+        init(buf, _count, comm);
     }
 
-    RMA_Win_guard(std::shared_ptr<T> _ptr, unsigned int _count, MPI_Comm comm): 
-        count(_count)
+    RMA_Win_guard(std::shared_ptr<T[]> _ptr, unsigned int _count, 
+                  MPI_Comm comm) 
     {
-        init(_ptr, count, comm);
+        init(_ptr, _count, comm);
     }
 
     ~RMA_Win_guard()
@@ -184,7 +204,7 @@ public:
 
             remove_from_list();
 
-            MPI_Win_free(win.get());
+            // MPI_Win_free(win.get());
             
             is_init = false;
         }
@@ -205,7 +225,7 @@ public:
         return ptr.get();
     }
 
-    std::shared_ptr<T> get_sptr()
+    std::shared_ptr<T[]> get_sptr()
     {
         return ptr;
     }
@@ -232,9 +252,15 @@ private:
         MPI_Free_mem(ptr);
     }
 
-    std::shared_ptr<T> ptr;
+    // std::unique_ptr<MPI_Win> win = std::make_unique<MPI_Win>(MPI_WIN_NULL);
+    // std::shared_ptr<MPI_Win> win = std::make_shared<MPI_Win>(MPI_WIN_NULL);
+    std::shared_ptr<MPI_Win> win = std::shared_ptr<MPI_Win>(new MPI_Win,
+            [](auto w) { 
+                MPI_Win_free(w); 
+                delete w;
+            });
 
-    std::unique_ptr<MPI_Win> win = std::make_unique<MPI_Win>(MPI_WIN_NULL);
+    std::shared_ptr<T[]> ptr;
 
     unsigned int count = 0;
 
@@ -264,8 +290,13 @@ private:
         //               << (void *) win.get() << std::endl;
         // }
         // Debug -- end
+        // std::cout << myrank << " INSERT " << id << " addr " 
+        //           << (void *) win.get() << std::endl;
 
-        winlist.insert(std::pair<win_id_t, MPI_Win*>(id, win.get())); 
+        // winlist.insert(std::pair<win_id_t, MPI_Win*>(id, win.get())); 
+        winlist.insert(std::pair<win_id_t, 
+                                 std::shared_ptr<MPI_Win>>(id, win)); 
+
 
         // Debug -- begin
         // for (auto &elem: winlist) {
@@ -280,6 +311,8 @@ private:
     void remove_from_list()
     {
         std::lock_guard<std::mutex> lock(winlock);
+
+        // std::cout << myrank << " R REMOVE" << std::endl;
 
         // // Debug -- begin
         // auto rank = 0;

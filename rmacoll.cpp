@@ -6,6 +6,7 @@
 
 #include <iostream>
 #include <memory>
+#include <vector>
 
 #include <mpi.h>
 
@@ -13,9 +14,6 @@
 #include "rmautils.h"
 #include "broadcast_linear.h"
 #include "broadcast_binomial.h"
-
-// int myrank = 0;
-// int nproc = 0;
 
 // Avoid global pointer to waiter?
 extern std::weak_ptr<waiter_c> waiter_weak_ptr;
@@ -31,35 +29,130 @@ enum bcast_types_t {
 std::function<int(const void*, int, MPI_Datatype, MPI_Aint, 
                   int, MPI_Datatype, MPI_Win, win_id_t, MPI_Comm)> RMA_Bcast;
 
-auto bcast_val = 100;
+using bcast_buf_t = int;
+const auto bcast_buf_size = 1;
+const auto bcast_val = 100;
+const auto bcast_root = 1;
 
-// test_rma_bcast: Test RMA collectives
-void test_rmacoll(decltype(RMA_Bcast) bcast_func, 
-                  RMA_Win_guard<int> &scoped_win, MPI_Comm comm)
+// test_rmacoll_1root: Test RMA collectives (one root)
+void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func, 
+                        int root, MPI_Comm comm)
 {
+    // Allocate and init memory for bcast ("to buf" -- on all procs)
+    bcast_buf_t *raw_ptr = nullptr;
+    MPI_Alloc_mem(bcast_buf_size * sizeof(bcast_buf_t), 
+                  MPI_INFO_NULL, &raw_ptr);
+    std::shared_ptr<bcast_buf_t[]> sptr(raw_ptr, 
+            [](auto p){ MPI_Free_mem(p); });
+
+    std::fill_n(raw_ptr, bcast_buf_size, 0);
+
+    // Create RMA window (all proc - to recv)
+    RMA_Win_guard<bcast_buf_t> scoped_win(sptr, bcast_buf_size, 
+                                          MPI_COMM_WORLD);
+
     auto myrank = 0;
     MPI_Comm_rank(comm, &myrank);
     
-    auto sptr = scoped_win.get_sptr();
-    auto ptr = sptr.get();
-
-    if (myrank != 0) 
-        std::cout << myrank << "\t" << "BEFORE\t" << ptr[0] << std::endl;
+    if (myrank != root) 
+        std::cout << myrank << "R BEFORE\t" << raw_ptr[0] << std::endl;
 
     // std::cerr << myrank << "R scoped win " << (void *) &scoped_win.get_win() 
     //           << std::endl;
 
-    if (myrank == 0) {
-        bcast_func(&bcast_val, scoped_win.get_count(), MPI_INT, 0, 
+    if (myrank == root) {
+        // Create and init buf for bcast ("from buf" - on root)
+        std::array<bcast_buf_t, bcast_buf_size> bcast_buf;
+        bcast_buf.fill(bcast_val);
+
+        bcast_func(bcast_buf.data(), scoped_win.get_count(), MPI_INT, 0, 
                    scoped_win.get_count(), MPI_INT, 
                    scoped_win.get_win(), scoped_win.get_id(), 
                    MPI_COMM_WORLD);
     }
 
-    if (myrank != 0) {
-        while (ptr[0] == 0);
-        std::cout << myrank << "R AFTER\t" << ptr[0] << std::endl;
+    if (myrank != root) {
+        // Wait until bcast will be finalized
+        while (raw_ptr[0] == 0);
     }
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    if (myrank != root) {
+        usleep(myrank * 10000);
+        std::cout << myrank << "R AFTER\t" << raw_ptr[0] << std::endl;
+    }
+}
+
+// test_rmacoll_nroot: Test RMA collectives (multiple root)
+void test_rmacoll_nroot(decltype(RMA_Bcast) bcast_func, MPI_Comm comm)
+{
+    // Allocate and init memory for bcast bufs ("to buf" -- on all procs)
+    std::vector<std::shared_ptr<bcast_buf_t[]>> vec_buf;
+
+    // Array of RMA windows (all proc - to recv)
+    // One window for each root
+    std::vector<RMA_Win_guard<bcast_buf_t>> sc_win_vec(nproc);
+
+    auto nproc = 0;
+    MPI_Comm_size(comm, &nproc);
+
+    for (auto rank = 0; rank < nproc; rank++) {
+        bcast_buf_t *raw_ptr = nullptr;
+
+        MPI_Alloc_mem(bcast_buf_size * sizeof(bcast_buf_t), 
+                      MPI_INFO_NULL, &raw_ptr);
+
+        std::shared_ptr<bcast_buf_t[]> sptr(raw_ptr, 
+                [](auto p){ MPI_Free_mem(p); });
+
+        std::fill_n(raw_ptr, bcast_buf_size, 0);
+
+        // sc_win_vec.emplace_back(sptr, bcast_buf_size, MPI_COMM_WORLD);
+        // sc_win_vec.emplace_back(std::move(
+        //         RMA_Win_guard<bcast_buf_t>(sptr, bcast_buf_size, 
+        //                                    MPI_COMM_WORLD)));
+
+        // sc_win_vec.push_back(std::move(
+        //         RMA_Win_guard<bcast_buf_t>(sptr, bcast_buf_size, 
+        //                                    MPI_COMM_WORLD)));
+
+        sc_win_vec[rank].init(sptr, bcast_buf_size, MPI_COMM_WORLD);
+
+        vec_buf.push_back(std::move(sptr));
+    }
+
+    MPI_Barrier(comm);
+
+    auto myrank = 0;
+    MPI_Comm_rank(comm, &myrank);
+    
+    // Print before bcast
+    usleep(myrank * 10000);
+    std::cout << myrank << "R BEFORE ";
+    for (auto buf: vec_buf)
+        std::cout << buf[0] << " ";
+    std::cout << std::endl;
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    // Create and init buf for bcast ("from buf" - on all procs)
+    std::array<bcast_buf_t, bcast_buf_size> bcast_buf;
+    bcast_buf.fill((myrank + 1) * 10);
+
+    std::cout << "FIRST " << bcast_buf[myrank] << std::endl;
+
+    bcast_func(bcast_buf.data(), sc_win_vec[myrank].get_count(), MPI_INT, 0,
+               sc_win_vec[myrank].get_count(), MPI_INT, 
+               sc_win_vec[myrank].get_win(), sc_win_vec[myrank].get_id(), 
+               MPI_COMM_WORLD);
+    
+    // Print after bcast
+    usleep((myrank + 1) * 50000);
+    std::cout << myrank << "R AFTER ";
+    for (auto buf: vec_buf)
+        std::cout << buf[0] << " ";
+    std::cout << std::endl;
 
     MPI_Barrier(MPI_COMM_WORLD);
 }
@@ -76,34 +169,19 @@ int main(int argc, char *argv[])
         MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
         MPI_Comm_size(MPI_COMM_WORLD, &nproc);
         
-        // Number of variables in window
-        const auto count = 1;           
-
-        // int *ptr = nullptr;
-        // MPI_Alloc_mem(count * sizeof(int), MPI_INFO_NULL, &ptr);
-        // ptr[0] = 0;
-
         {
-            int *raw_ptr = nullptr;
-            MPI_Alloc_mem(count * sizeof(int), MPI_INFO_NULL, &raw_ptr);
-            std::shared_ptr<int> ptr(raw_ptr, [](auto ptr){
-                        MPI_Free_mem(ptr);
-                    });
-            ptr.get()[0] = 0;
-
-            // auto ptr = new int[2];
-            // *ptr = 0;
-
-            RMA_Win_guard<int> scoped_win(ptr, count, MPI_COMM_WORLD);
-
             if (bcast_type == binomial) {
-                auto waiter_sh_ptr = std::make_shared<waiter_c>(mpi_thr_provided, 
-                                                                MPI_COMM_WORLD);
+                auto waiter_sh_ptr = std::make_shared<waiter_c>
+                    (mpi_thr_provided, MPI_COMM_WORLD);
+
                 waiter_weak_ptr = waiter_sh_ptr;
-               
-                test_rmacoll(&RMA_Bcast_binomial, scoped_win, MPI_COMM_WORLD);
+
+                // test_rmacoll_1root(&RMA_Bcast_binomial, bcast_root, 
+                //                    MPI_COMM_WORLD);
+                test_rmacoll_nroot(&RMA_Bcast_binomial, MPI_COMM_WORLD);
             } else if (bcast_type == linear) {
-                test_rmacoll(RMA_Bcast_linear, scoped_win, MPI_COMM_WORLD);
+                test_rmacoll_1root(RMA_Bcast_linear, bcast_root, 
+                                   MPI_COMM_WORLD);
             }
         }
 

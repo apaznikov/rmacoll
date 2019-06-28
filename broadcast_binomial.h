@@ -30,6 +30,8 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
                        int target_count, MPI_Datatype target_datatype,
                        MPI_Win win, win_id_t wid, MPI_Comm comm);
 
+const auto REQBUFSIZE = 1000;
+
 struct req_t {
     // Buffer to put/get
     int buf;        
@@ -76,10 +78,11 @@ public:
                 "Level of provided thread support must be MPI_THREAD_MULTIPLE");
         }
 
-        req_win.init(req_len, MPI_COMM_WORLD);
-
         MPI_Comm_rank(comm, &myrank);
         MPI_Comm_size(comm, &nproc);
+
+        // Init RMA window with array of requests
+        req_win.init(nproc, MPI_COMM_WORLD);
 
         waiter_thr = boost::scoped_thread<>(boost::thread
                 (&waiter_c::waiter_loop, this));
@@ -120,7 +123,7 @@ private:
     std::future<void> ready_fut = ready_prom.get_future();
 
     // Request from root field
-    const unsigned int req_len = 1;
+    unsigned int req_len = 1;
     RMA_Win_guard<req_t> req_win;
 
     boost::scoped_thread<> waiter_thr;
