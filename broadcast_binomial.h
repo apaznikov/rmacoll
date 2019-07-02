@@ -30,6 +30,15 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
                        int target_count, MPI_Datatype target_datatype,
                        MPI_Win win, win_id_t wid, MPI_Comm comm);
 
+// RMA_Bcast_test: Test if RMA bcast is done
+int RMA_Bcast_test();
+
+// RMA_Bcast_flush: Wait until RMA_Bcast is completed
+int RMA_Bcast_flush();
+
+// RMA_Bcast_test: Test if RMA bcast is done
+int RMA_Bcast_test(bool &done);
+
 const auto REQBUFSIZE = 1000;
 
 struct req_t {
@@ -82,10 +91,23 @@ public:
         MPI_Comm_size(comm, &nproc);
 
         // Init RMA window with array of requests
-        req_win.init(nproc, MPI_COMM_WORLD);
+        req_win_g.init(nproc, comm);
+
+        // Init RMA window for complete flags
+        doneflag_win_g.init(nproc, comm);
+
+        set_doneflags(true);
 
         waiter_thr = boost::scoped_thread<>(boost::thread
                 (&waiter_c::waiter_loop, this));
+    }
+
+    void set_doneflags(bool val)
+    {
+        auto doneflag_arr = doneflag_win_g.get_ptr();
+        for (auto rank = 0; rank < nproc; rank++)
+            doneflag_arr[rank] = val;
+        doneflag_arr[myrank] = true;
     }
 
     // term: Terminate waiter thread
@@ -94,15 +116,31 @@ public:
         waiter_term_flag = true;
     }
 
-    // get_winguard: Get win guard
-    RMA_Win_guard<req_t> &get_winguard()
+    // get_winguard: Get win guard for request
+    MPI_Win &get_reqwin()
     {
-        return req_win;
+        return req_win_g.get_win();
+    }
+    
+    // get_winguard: Get win guard for done flag
+    MPI_Win &get_doneflagwin()
+    {
+        return doneflag_win_g.get_win();
     }
 
     auto &get_fut()
     {
         return ready_fut;
+    }
+
+    int get_nproc()
+    {
+        return nproc;
+    }
+
+    int get_myrank()
+    {
+        return myrank;
     }
 
     ~waiter_c() {
@@ -123,8 +161,10 @@ private:
     std::future<void> ready_fut = ready_prom.get_future();
 
     // Request from root field
-    unsigned int req_len = 1;
-    RMA_Win_guard<req_t> req_win;
+    RMA_Win_guard<req_t> req_win_g;
+
+    // Array of complete flags
+    RMA_Win_guard<bool> doneflag_win_g;
 
     boost::scoped_thread<> waiter_thr;
 

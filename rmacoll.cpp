@@ -108,15 +108,6 @@ void test_rmacoll_nroot(decltype(RMA_Bcast) bcast_func, MPI_Comm comm)
 
         std::fill_n(raw_ptr, bcast_buf_size, 0);
 
-        // sc_win_vec.emplace_back(sptr, bcast_buf_size, MPI_COMM_WORLD);
-        // sc_win_vec.emplace_back(std::move(
-        //         RMA_Win_guard<bcast_buf_t>(sptr, bcast_buf_size, 
-        //                                    MPI_COMM_WORLD)));
-
-        // sc_win_vec.push_back(std::move(
-        //         RMA_Win_guard<bcast_buf_t>(sptr, bcast_buf_size, 
-        //                                    MPI_COMM_WORLD)));
-
         sc_win_vec[rank].init(sptr, bcast_buf_size, MPI_COMM_WORLD);
 
         vec_buf.push_back(std::move(sptr));
@@ -140,13 +131,23 @@ void test_rmacoll_nroot(decltype(RMA_Bcast) bcast_func, MPI_Comm comm)
     std::array<bcast_buf_t, bcast_buf_size> bcast_buf;
     bcast_buf.fill((myrank + 1) * 10);
 
-    std::cout << "FIRST " << bcast_buf[myrank] << std::endl;
+    // std::cout << myrank << "R FIRST " << bcast_buf[0] << std::endl;
 
     bcast_func(bcast_buf.data(), sc_win_vec[myrank].get_count(), MPI_INT, 0,
                sc_win_vec[myrank].get_count(), MPI_INT, 
                sc_win_vec[myrank].get_win(), sc_win_vec[myrank].get_id(), 
                MPI_COMM_WORLD);
-    
+
+    bcast_buf.fill((myrank + 1) * 100);
+
+    bcast_func(bcast_buf.data(), sc_win_vec[myrank].get_count(), MPI_INT, 0,
+               sc_win_vec[myrank].get_count(), MPI_INT, 
+               sc_win_vec[myrank].get_win(), sc_win_vec[myrank].get_id(), 
+               MPI_COMM_WORLD);
+
+    if (myrank == 0)
+        RMA_Bcast_flush();
+
     // Print after bcast
     usleep((myrank + 1) * 50000);
     std::cout << myrank << "R AFTER ";

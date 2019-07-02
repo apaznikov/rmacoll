@@ -61,7 +61,7 @@ static void put_loop(const req_t &req, const MPI_Win &win,
             if (put_rank < nproc) {
                 put_rank = comp_rank(put_rank, req.root, nproc);
                 put_request(req, put_rank, req.root, win);
-                std::cout << myrank << "R\tPUT to " << put_rank << std::endl;
+                // std::cout << myrank << "R\tPUT to " << put_rank << std::endl;
             }
         } else {
             // If bit is set, break
@@ -72,13 +72,32 @@ static void put_loop(const req_t &req, const MPI_Win &win,
     }
 }
 
-// RMA_Bcast_binomial: Binomial tree broadcast
-// (?) Remove MPI_Win argument?
-int RMA_Bcast_binomial(const void *origin_addr, int origin_count, 
-                       MPI_Datatype origin_datatype, 
-                       MPI_Aint target_disp, int target_count, 
-                       MPI_Datatype target_datatype,
-                       MPI_Win win, win_id_t wid, MPI_Comm comm)
+// bcast_isdone: Read and check flag array
+bool bcast_isdone(int nproc, int myrank, bool doneflags[], 
+                      MPI_Win &doneflag_win)
+{
+    MPI_Get_accumulate(NULL, 0, MPI_BYTE,
+                       doneflags, nproc,
+                       MPI_BYTE, myrank, 0, nproc, MPI_BYTE, MPI_NO_OP,
+                       doneflag_win);
+
+    MPI_Win_flush(myrank, doneflag_win);
+
+    // std::cout << myrank << "R doneflags " << nproc << " ";
+    for (auto i = 0; i < nproc; i++) {
+        // std::cout << doneflags[i] << " ";
+        if (doneflags[i] == false) {
+            // std::cout << std::endl;
+            return false;
+        }
+    }
+
+    // std::cout << std::endl;
+    return true;
+}
+
+// RMA_Bcast_test: Test if RMA bcast is done
+int RMA_Bcast_test(bool &done)
 {
     auto sp = waiter_weak_ptr.lock();
 
@@ -87,9 +106,65 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
         return RET_CODE_ERROR;
     }
 
-    auto &winguard = sp->get_winguard();
-    auto &req_raw_win = winguard.get_win();
-    auto req_ptr = winguard.get_sptr();
+    auto &doneflag_win = sp->get_doneflagwin();
+
+    // Atomically lock myself and read doneflag array
+    RMA_Lock_guard lock_root(myrank, doneflag_win);
+
+    auto nproc = sp->get_nproc();
+    auto myrank = sp->get_myrank();
+    bool doneflags[nproc];
+
+    done = bcast_isdone(nproc, myrank, doneflags, doneflag_win);
+
+    return RET_CODE_SUCCESS;
+}
+
+// RMA_Bcast_flush: Wait until RMA_Bcast is completed
+int RMA_Bcast_flush()
+{
+    auto sp = waiter_weak_ptr.lock();
+
+    if (!sp) {
+        std::cerr << "waiter_weak_ptr is expired" << std::endl;
+        return RET_CODE_ERROR;
+    }
+
+    auto &doneflag_win = sp->get_doneflagwin();
+
+    // Atomically lock myself and read doneflag array
+    RMA_Lock_guard lock_root(myrank, doneflag_win);
+
+    auto nproc = sp->get_nproc();
+    auto myrank = sp->get_myrank();
+    bool doneflags[nproc];
+
+    while (!bcast_isdone(nproc, myrank, doneflags, doneflag_win));
+
+    return RET_CODE_SUCCESS;
+}
+
+// RMA_Bcast_binomial: Binomial tree broadcast
+// (?) Remove MPI_Win argument?
+int RMA_Bcast_binomial(const void *origin_addr, int origin_count, 
+                       MPI_Datatype origin_datatype, 
+                       MPI_Aint target_disp, int target_count, 
+                       MPI_Datatype target_datatype,
+                       MPI_Win win, win_id_t wid, MPI_Comm comm)
+{
+    // Wait until previous bcast is completed
+    RMA_Bcast_flush();
+
+    auto sp = waiter_weak_ptr.lock();
+
+    if (!sp) {
+        std::cerr << "waiter_weak_ptr is expired" << std::endl;
+        return RET_CODE_ERROR;
+    }
+
+    sp->set_doneflags(false);
+
+    auto &req_raw_win = sp->get_reqwin();
 
     // Set request fields
     req_t req;
@@ -126,14 +201,14 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
 // Active on each thread except root.
 void waiter_c::waiter_loop()
 {
-    auto req_sptr = req_win.get_sptr();
+    auto req_sptr = req_win_g.get_sptr();
 
     // Init requests
     for (auto i = 0; i < nproc; i++) {
         req_sptr[i].op = req_t::noop;
     }
 
-    auto &req_raw_win = req_win.get_win();
+    auto &req_raw_win = req_win_g.get_win();
 
     // Allocate req_read (array of reqeusts for all procs)
     std::shared_ptr<req_t[]> req_read_sptr(new req_t[nproc]);
@@ -141,13 +216,6 @@ void waiter_c::waiter_loop()
 
     for (auto rank = 0; rank < nproc; rank++)
         req_read[rank].op = req_t::op_t::noop;
-
-    // if (myrank == 2) {
-    //     for (auto i = 0; i < nproc; i++) {
-    //         std::cout << myrank << "R " << i << " " << req_read[i].op << std::endl;
-    //         std::cout << myrank << "R " << i << " " << req_sptr[i].op << std::endl;
-    //     }
-    // }
 
     const auto req_arr_sz = sizeof(req_t) * nproc;
 
@@ -183,10 +251,10 @@ void waiter_c::waiter_loop()
             if (req_read[rank].op == req_t::op_t::bcast) {
                 req_sptr[rank].op = req_t::op_t::noop;
 
-                std::cout << myrank << "R GOT op = " << req_read[rank].op 
-                          << " buf " << req_read[rank].buf 
-                          << " root " << req_read[rank].root 
-                          << " wid " << req_read[rank].wid << std::endl;
+                // std::cout << myrank << "R GOT op = " << req_read[rank].op 
+                //           << " buf " << req_read[rank].buf 
+                //           << " root " << req_read[rank].root 
+                //           << " wid " << req_read[rank].wid << std::endl;
 
                 // Copy buf to local memory
                 // Search for bcast windows id in windows list
@@ -203,8 +271,8 @@ void waiter_c::waiter_loop()
 
                 // std::cout << myrank << "R found " << (void*) bcast_win << std::endl;
 
-                // Atomically set local value
-                RMA_Lock_guard lock(myrank, *bcast_win);
+                // Atomically set my local value
+                RMA_Lock_guard lock_myself(myrank, *bcast_win);
 
                 MPI_Accumulate(&req_read[rank].buf, 
                                req_read[rank].bufsize, MPI_BYTE, 
@@ -212,12 +280,23 @@ void waiter_c::waiter_loop()
                                req_read[rank].bufsize, MPI_BYTE, MPI_REPLACE, 
                                *bcast_win);
 
-                lock.unlock();
+                lock_myself.unlock();
+
+                // Set complete flag to root
+                auto doneflag_win = doneflag_win_g.get_win();
+                RMA_Lock_guard lock_root(req_read[rank].root, doneflag_win);
+
+                auto flag = true;
+                MPI_Accumulate(&flag, 1, MPI_BYTE, req_read[rank].root, myrank, 
+                               1, MPI_BYTE, MPI_REPLACE, doneflag_win);
+
+                lock_root.unlock();
 
                 // Put request to all next peers
                 put_loop(req_read[rank], req_raw_win, myrank, nproc);
             }
         }
+
 
         usleep(waiter_timeout);
     }
