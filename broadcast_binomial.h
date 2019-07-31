@@ -39,32 +39,35 @@ int RMA_Bcast_flush();
 // RMA_Bcast_test: Test if RMA bcast is done
 int RMA_Bcast_test(bool &done);
 
-const auto REQBUFSIZE = 1000;
+// Default buffer size
+const auto BUFCOUNT = 1000;
 
+// Operation request 
 struct req_t {
-    // Buffer to put/get
-    int buf;        
-
-    // Buf size for current message (in bytes)
-    int bufsize;
-
-    // Operation type
-    enum op_t { noop = 0, bcast = 1 };
+    enum op_t { noop = 0, bcast = 1, resize = 2 };
     op_t op;
     
+    // Buf size for current message (in bytes)
+    int count;
+};
+    
+// Data for operation
+struct data_t {
+    // Buffer to put/get
+    int buf[BUFCOUNT];
+
     // Root (for collectives with root)
-    int root;       
+    int root;
 
     // RMA window's id
     win_id_t wid;
 };
 
 const auto req_size = sizeof(req_t);
+const auto data_size = sizeof(data_t);
 
 // Offsets for RMA operations
-const MPI_Aint offset_buf = offsetof(req_t, buf);
-const MPI_Aint offset_op = offsetof(req_t, op);
-const MPI_Aint offset_root = offsetof(req_t, root);
+const MPI_Aint offset_buf = offsetof(data_t, buf);
 
 // Class for waiter thread for binomial broadcast
 class waiter_c
@@ -89,14 +92,19 @@ public:
 
         MPI_Comm_rank(comm, &myrank);
         MPI_Comm_size(comm, &nproc);
-
+        
         // Init RMA window with array of requests
         req_win_g.init(nproc, comm);
+
+        // Init RMA window with array of data
+        data_win_g.init(nproc, comm);
 
         // Init RMA window for complete flags
         doneflag_win_g.init(nproc, comm);
 
         set_doneflags(true);
+
+        set_ops();
 
         waiter_thr = boost::scoped_thread<>(boost::thread
                 (&waiter_c::waiter_loop, this));
@@ -110,13 +118,20 @@ public:
         doneflag_arr[myrank] = true;
     }
 
+
     // term: Terminate waiter thread
     void term()
     {
         waiter_term_flag = true;
     }
 
-    // get_winguard: Get win guard for request
+    // get_datawin: get window for request
+    MPI_Win &get_datawin()
+    {
+        return data_win_g.get_win();
+    }
+
+    // get_opwin: get window for operation request
     MPI_Win &get_reqwin()
     {
         return req_win_g.get_win();
@@ -159,9 +174,12 @@ private:
 
     std::promise<void> ready_prom;
     std::future<void> ready_fut = ready_prom.get_future();
-
-    // Request from root field
+    
+    // Window for operation request
     RMA_Win_guard<req_t> req_win_g;
+
+    // Window for data (buffer + info)
+    RMA_Win_guard<data_t> data_win_g;
 
     // Array of complete flags
     RMA_Win_guard<bool> doneflag_win_g;
@@ -172,4 +190,11 @@ private:
     void waiter_loop();
 
     int myrank, nproc;
+
+    void set_ops()
+    {
+        auto req_arr = req_win_g.get_ptr();
+        for (auto rank = 0; rank < nproc; rank++)
+            req_arr[rank].op = req_t::op_t::noop;
+    }
 };

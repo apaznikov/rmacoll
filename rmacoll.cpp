@@ -30,9 +30,9 @@ std::function<int(const void*, int, MPI_Datatype, MPI_Aint,
                   int, MPI_Datatype, MPI_Win, win_id_t, MPI_Comm)> RMA_Bcast;
 
 using bcast_buf_t = int;
+const auto bcast_root = 0;
 const auto bcast_buf_size = 1;
 const auto bcast_val = 100;
-const auto bcast_root = 1;
 
 // test_rmacoll_1root: Test RMA collectives (one root)
 void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func, 
@@ -54,8 +54,10 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
     auto myrank = 0;
     MPI_Comm_rank(comm, &myrank);
     
-    if (myrank != root) 
+    if (myrank != root) {
+        usleep((myrank + 1) * 50000);
         std::cout << myrank << "R BEFORE\t" << raw_ptr[0] << std::endl;
+    }
 
     // std::cerr << myrank << "R scoped win " << (void *) &scoped_win.get_win() 
     //           << std::endl;
@@ -71,15 +73,18 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
                    MPI_COMM_WORLD);
     }
 
-    if (myrank != root) {
-        // Wait until bcast will be finalized
-        while (raw_ptr[0] == 0);
-    }
+    // if (myrank != root) {
+    //     // Wait until bcast will be finalized
+    //     while (raw_ptr[0] == 0);
+    // }
+
+    // if (myrank == 0)
+    //     RMA_Bcast_flush();
 
     MPI_Barrier(MPI_COMM_WORLD);
 
     if (myrank != root) {
-        usleep(myrank * 10000);
+        usleep((myrank + 1) * 50000);
         std::cout << myrank << "R AFTER\t" << raw_ptr[0] << std::endl;
     }
 }
@@ -177,9 +182,11 @@ int main(int argc, char *argv[])
 
                 waiter_weak_ptr = waiter_sh_ptr;
 
-                // test_rmacoll_1root(&RMA_Bcast_binomial, bcast_root, 
-                //                    MPI_COMM_WORLD);
-                test_rmacoll_nroot(&RMA_Bcast_binomial, MPI_COMM_WORLD);
+                test_rmacoll_1root(&RMA_Bcast_binomial, bcast_root, 
+                                   MPI_COMM_WORLD);
+                // test_rmacoll_nroot(&RMA_Bcast_binomial, MPI_COMM_WORLD);
+                
+                usleep(200000);
             } else if (bcast_type == linear) {
                 test_rmacoll_1root(RMA_Bcast_linear, bcast_root, 
                                    MPI_COMM_WORLD);
