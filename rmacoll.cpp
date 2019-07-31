@@ -58,6 +58,7 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
         usleep((myrank + 1) * 50000);
         std::cout << myrank << "R BEFORE\t" << raw_ptr[0] << std::endl;
     }
+    MPI_Barrier(comm);
 
     // std::cerr << myrank << "R scoped win " << (void *) &scoped_win.get_win() 
     //           << std::endl;
