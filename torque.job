@@ -1,5 +1,6 @@
 #PBS -N mpitask
 #PBS -l nodes=2:ppn=8
+#PBS -l walltime=01:30:00
 #PBS -j oe
 #PBS -o stdout
 
