@@ -19,7 +19,7 @@
 #include "rmacoll.h"
 #include "rmautils.h"
 
-const auto waiter_timeout = 1000;
+const auto waiter_timeout = 100;
 
 extern int myrank;
 extern int nproc;
@@ -40,7 +40,7 @@ int RMA_Bcast_flush();
 int RMA_Bcast_test(bool &done);
 
 // Default buffer size
-const auto BUFCOUNT = 1000;
+const auto BUFCOUNT = 2000000;
 
 // Operation request 
 struct req_t {
@@ -48,7 +48,7 @@ struct req_t {
     op_t op;
     
     // Buf size for current message (in bytes)
-    int count;
+    int bufsize;
 };
     
 // Data for operation
@@ -57,17 +57,20 @@ struct data_t {
     int buf[BUFCOUNT];
 
     // Root (for collectives with root)
-    int root;
+    int root = -1;
 
     // RMA window's id
-    win_id_t wid;
+    win_id_t wid = MPI_WIN_NO_ID;
 };
 
 const auto req_size = sizeof(req_t);
-const auto data_size = sizeof(data_t);
+const auto data_t_size = sizeof(data_t);
 
 // Offsets for RMA operations
 const MPI_Aint offset_buf = offsetof(data_t, buf);
+const MPI_Aint offset_root_wid = offsetof(data_t, root);
+
+const auto root_wid_size = sizeof(data_t::root) + sizeof(data_t::wid);
 
 // Class for waiter thread for binomial broadcast
 class waiter_c

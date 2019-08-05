@@ -23,7 +23,7 @@ extern std::weak_ptr<waiter_c> waiter_weak_ptr;
 enum bcast_types_t {
     linear   = 1,
     binomial = 2
-} bcast_type = binomial;
+} bcast_type = linear;
 
 // Prototype for RMA broadcast function
 std::function<int(const void*, int, MPI_Datatype, MPI_Aint, 
@@ -31,12 +31,13 @@ std::function<int(const void*, int, MPI_Datatype, MPI_Aint,
 
 using bcast_buf_t = int;
 const auto bcast_root = 0;
-const auto bcast_buf_size = 1;
+const auto bcast_buf_size_def = 2'000'000;
 const auto bcast_val = 100;
+const auto ntimes = 30;
 
 // test_rmacoll_1root: Test RMA collectives (one root)
 void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func, 
-                        int root, MPI_Comm comm)
+                        int root, int bcast_buf_size, MPI_Comm comm)
 {
     // Allocate and init memory for bcast ("to buf" -- on all procs)
     bcast_buf_t *raw_ptr = nullptr;
@@ -56,42 +57,61 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
     
     if (myrank != root) {
         usleep((myrank + 1) * 50000);
+#ifdef _DEBUG
         std::cout << myrank << "R BEFORE\t" << raw_ptr[0] << std::endl;
+#endif
     }
     MPI_Barrier(comm);
 
     // std::cerr << myrank << "R scoped win " << (void *) &scoped_win.get_win() 
     //           << std::endl;
 
-    if (myrank == root) {
-        // Create and init buf for bcast ("from buf" - on root)
-        std::array<bcast_buf_t, bcast_buf_size> bcast_buf;
-        bcast_buf.fill(bcast_val);
+    double tsum = 0;
 
-        bcast_func(bcast_buf.data(), scoped_win.get_count(), MPI_INT, 0, 
-                   scoped_win.get_count(), MPI_INT, 
-                   scoped_win.get_win(), scoped_win.get_id(), 
-                   MPI_COMM_WORLD);
+    for (auto i = 0; i < ntimes; i++) {
+        double tbegin = 0, tend = 0;
+
+        if (myrank == root) {
+            // Create and init buf for bcast ("from buf" - on root)
+            std::vector<bcast_buf_t> bcast_buf(bcast_buf_size, bcast_val);
+
+            tbegin = MPI_Wtime();
+
+            bcast_func(bcast_buf.data(), scoped_win.get_count(), MPI_INT, 0, 
+                       scoped_win.get_count(), MPI_INT, 
+                       scoped_win.get_win(), scoped_win.get_id(), 
+                       MPI_COMM_WORLD);
+        }
+
+        if (myrank == root) {
+            if (bcast_type == binomial)
+                RMA_Bcast_flush();
+            tend = MPI_Wtime();
+            tsum += tend - tbegin;
+            std::cout << "i " << i << " " << tend - tbegin << std::endl;
+        }
     }
 
-    // if (myrank != root) {
-    //     // Wait until bcast will be finalized
-    //     while (raw_ptr[0] == 0);
-    // }
-
-    // if (myrank == 0)
-    //     RMA_Bcast_flush();
+    if (myrank == root)
+        std::cout << "Elapsed time (bufsize = " << bcast_buf_size 
+                  << "): " << tsum / ntimes << std::endl;
 
     MPI_Barrier(MPI_COMM_WORLD);
 
+#ifdef _DEBUG
     if (myrank != root) {
         usleep((myrank + 1) * 50000);
-        std::cout << myrank << "R AFTER\t" << raw_ptr[0] << std::endl;
+        std::cout << myrank << "R AFTER\t";
+        for (auto i = 0; i < bcast_buf_size; i++)
+            std::cout << raw_ptr[i] << " ";
+        std::cout << std::endl;
     }
+#endif
 }
 
 // test_rmacoll_nroot: Test RMA collectives (multiple root)
-void test_rmacoll_nroot(decltype(RMA_Bcast) bcast_func, MPI_Comm comm)
+void test_rmacoll_nroot(decltype(RMA_Bcast) bcast_func, int bcast_buf_size, 
+                        MPI_Comm comm)
 {
     // Allocate and init memory for bcast bufs ("to buf" -- on all procs)
     std::vector<std::shared_ptr<bcast_buf_t[]>> vec_buf;
@@ -134,8 +154,7 @@ void test_rmacoll_nroot(decltype(RMA_Bcast) bcast_func, MPI_Comm comm)
     MPI_Barrier(MPI_COMM_WORLD);
 
     // Create and init buf for bcast ("from buf" - on all procs)
-    std::array<bcast_buf_t, bcast_buf_size> bcast_buf;
-    bcast_buf.fill((myrank + 1) * 10);
+    std::vector<bcast_buf_t> bcast_buf(bcast_buf_size, (myrank + 1) * 10);
 
     // std::cout << myrank << "R FIRST " << bcast_buf[0] << std::endl;
 
@@ -144,7 +163,7 @@ void test_rmacoll_nroot(decltype(RMA_Bcast) bcast_func, MPI_Comm comm)
                sc_win_vec[myrank].get_win(), sc_win_vec[myrank].get_id(), 
                MPI_COMM_WORLD);
 
-    bcast_buf.fill((myrank + 1) * 100);
+    std::fill(bcast_buf.begin(), bcast_buf.end(), (myrank + 1) * 100);
 
     bcast_func(bcast_buf.data(), sc_win_vec[myrank].get_count(), MPI_INT, 0,
                sc_win_vec[myrank].get_count(), MPI_INT, 
@@ -184,13 +203,13 @@ int main(int argc, char *argv[])
                 waiter_weak_ptr = waiter_sh_ptr;
 
                 test_rmacoll_1root(&RMA_Bcast_binomial, bcast_root, 
-                                   MPI_COMM_WORLD);
+                                   bcast_buf_size_def, MPI_COMM_WORLD);
                 // test_rmacoll_nroot(&RMA_Bcast_binomial, MPI_COMM_WORLD);
                 
                 usleep(200000);
             } else if (bcast_type == linear) {
                 test_rmacoll_1root(RMA_Bcast_linear, bcast_root, 
-                                   MPI_COMM_WORLD);
+                                   bcast_buf_size_def, MPI_COMM_WORLD);
             }
         }
 

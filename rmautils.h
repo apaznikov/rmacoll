@@ -16,7 +16,7 @@
 
 extern int myrank;
 
-using win_id_t = unsigned int;
+using win_id_t = int;
 
 const win_id_t MPI_WIN_NO_ID = -1;
 
@@ -108,6 +108,9 @@ template<typename T>
 class RMA_Win_guard
 {
 public:
+    // Window type
+    enum type_t { common = 0, dynamic = 1 };
+
     // init: Initialize window: allocate memory and init win
     void init(unsigned int _count, MPI_Comm comm)
     {
