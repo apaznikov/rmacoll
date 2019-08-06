@@ -19,6 +19,8 @@
 #include "rmacoll.h"
 #include "rmautils.h"
 
+// #define _DEBUG
+
 const auto waiter_timeout = 100;
 
 extern int myrank;
@@ -40,7 +42,7 @@ int RMA_Bcast_flush();
 int RMA_Bcast_test(bool &done);
 
 // Default buffer size
-const auto BUFCOUNT = 2000000;
+const auto BUFCOUNT = 20'000'000;
 
 // Operation request 
 struct req_t {

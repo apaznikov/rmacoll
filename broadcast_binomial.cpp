@@ -109,21 +109,21 @@ int RMA_Bcast_flush()
 }
 
 // put_request: Put request and data into remote memory
-static void put_request(const req_t &req, const data_t &data, int rank, int root, 
+static void put_request(const req_t &req, data_t *data, int rank, int root, 
                         const MPI_Win &req_win, const MPI_Win &data_win)
 {
     auto disp = data_t_size * root;
 #ifdef _DEBUG
     std::cout << "disp " << disp << " bufsize " << req.bufsize
-              << " data " << data.buf[0] << std::endl;
+              << " data " << data->buf[0] << std::endl;
 #endif
 
     // Put data
     // TODO devide into Acc for buf and root, wid
-    MPI_Accumulate(&data, req.bufsize, MPI_BYTE, rank, disp, req.bufsize, 
+    MPI_Accumulate(data, req.bufsize, MPI_BYTE, rank, disp, req.bufsize, 
                    MPI_BYTE, MPI_REPLACE, data_win);
 
-    MPI_Accumulate(&data.root, root_wid_size, MPI_BYTE, rank, 
+    MPI_Accumulate(&data->root, root_wid_size, MPI_BYTE, rank, 
                    disp + offset_root_wid, root_wid_size, MPI_BYTE, 
                    MPI_REPLACE, data_win);
 
@@ -138,10 +138,10 @@ static void put_request(const req_t &req, const data_t &data, int rank, int root
 }
 
 // Put requests to all peers
-static void put_loop(const req_t &req, const data_t &data, int myrank, int nproc, 
+static void put_loop(const req_t &req, data_t *data, int myrank, int nproc, 
                      const MPI_Win &req_win, const MPI_Win &data_win)
 {
-    auto srank = comp_srank(myrank, data.root, nproc);
+    auto srank = comp_srank(myrank, data->root, nproc);
 
     auto mask = 1;
 
@@ -150,12 +150,12 @@ static void put_loop(const req_t &req, const data_t &data, int myrank, int nproc
             // Put (send) data to the next process if bit is not set
             auto put_rank = srank | mask;
             if (put_rank < nproc) {
-                put_rank = comp_rank(put_rank, data.root, nproc);
+                put_rank = comp_rank(put_rank, data->root, nproc);
 #ifdef _DEBUG
                 std::cout << myrank << "R\tPUT to " << put_rank << std::endl;
 #endif
 
-                put_request(req, data, put_rank, data.root, req_win, data_win);
+                put_request(req, data, put_rank, data->root, req_win, data_win);
             }
         } else {
             // If bit is set, break 
@@ -200,17 +200,17 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
     req.bufsize = origin_count * type_size;
 
     // Set data fields
-    data_t data;
-    data.root = myrank;
-    data.wid = wid;
+    auto data = std::make_unique<data_t>();
+    data->root = myrank;
+    data->wid = wid;
 
     // Copy memory to buffer
-    memcpy(&data.buf, origin_addr, type_size * origin_count);
+    memcpy(&data->buf, origin_addr, type_size * origin_count);
 
     // Wait until passive synchronization epoch starts in waiter
     sp->get_fut().wait();
 
-    put_loop(req, data, myrank, nproc, sp->get_reqwin(), sp->get_datawin());
+    put_loop(req, data.get(), myrank, nproc, sp->get_reqwin(), sp->get_datawin());
 
     return RET_CODE_SUCCESS;
 }
@@ -287,17 +287,18 @@ void waiter_c::waiter_loop()
                 // Read data from local memory
                 const auto disp = data_t_size * rank;
 
-                data_t data_read;
-                // Get buf
+                auto data_read = std::make_unique<data_t>();
+
+                // Get buf with specified bufsize
                 MPI_Get_accumulate(NULL, 0, MPI_BYTE, 
-                                   &data_read, req_read[rank].bufsize, 
+                                   data_read.get(), req_read[rank].bufsize, 
                                    MPI_BYTE, myrank, disp, 
                                    req_read[rank].bufsize, MPI_BYTE, 
                                    MPI_NO_OP, data_raw_win);
 
                 // Get root and wid
                 MPI_Get_accumulate(NULL, 0, MPI_BYTE, 
-                                   &data_read.root, root_wid_size, 
+                                   &data_read->root, root_wid_size, 
                                    MPI_BYTE, myrank, disp + offset_root_wid, 
                                    root_wid_size, MPI_BYTE, MPI_NO_OP, 
                                    data_raw_win);
@@ -307,19 +308,19 @@ void waiter_c::waiter_loop()
                 // data_sptr[0] because RMA_Win_guard always stores 
                 // shared_ptr<T[]> for now
 #ifdef _DEBUG
-                std::cout << myrank << "R buf = " << data_read.buf[0]
+                std::cout << myrank << "R buf = " << data_read->buf[0]
                           << " sptrbuf " << data_sptr[0].buf[0] 
                           << " data_size " << data_t_size
-                          << " root " << data_read.root
+                          << " root " << data_read->root
                           << " sptr root " << data_sptr[0].root
-                          << " wid " << data_read.wid
+                          << " wid " << data_read->wid
                           << std::endl;
 #endif
 
 #ifdef _DEBUG
                 std::cout << myrank << "buf\t";
                 for (auto i = 0u; i < req_read[rank].bufsize / sizeof(int); i++)
-                    std::cout << data_read.buf[i] << " ";
+                    std::cout << data_read->buf[i] << " ";
                 std::cout << std::endl;
 #endif
 
@@ -328,10 +329,10 @@ void waiter_c::waiter_loop()
                 
                 // Search for bcast window id in the windows list
                 std::shared_ptr<MPI_Win> bcast_win;
-                auto isfound = find_win(data_read.wid, bcast_win);
+                auto isfound = find_win(data_read->wid, bcast_win);
 
                 if (isfound == false) {
-                    std::cerr << "Window " << data_read.wid 
+                    std::cerr << "Window " << data_read->wid 
                               << " was not found" << std::endl;
                     MPI_Abort(MPI_COMM_WORLD, RET_CODE_ERROR);
                 }
@@ -342,7 +343,7 @@ void waiter_c::waiter_loop()
                 // Why cannot replace with memcpy?? 
                 RMA_Lock_guard lock_myself(myrank, *bcast_win);
 
-                MPI_Accumulate(&data_read.buf, 
+                MPI_Accumulate(&data_read->buf, 
                                req_read[rank].bufsize, MPI_BYTE, 
                                myrank, offset_buf, 
                                req_read[rank].bufsize, MPI_BYTE, MPI_REPLACE, 
@@ -352,16 +353,16 @@ void waiter_c::waiter_loop()
 
                 // Set complete flag to root
                 auto doneflag_win = doneflag_win_g.get_win();
-                RMA_Lock_guard lock_root(data_read.root, doneflag_win);
+                RMA_Lock_guard lock_root(data_read->root, doneflag_win);
 
                 auto flag = true;
-                MPI_Accumulate(&flag, 1, MPI_BYTE, data_read.root, myrank, 
+                MPI_Accumulate(&flag, 1, MPI_BYTE, data_read->root, myrank, 
                                1, MPI_BYTE, MPI_REPLACE, doneflag_win);
 
                 lock_root.unlock();
 
                 // Put request to all next peers
-                put_loop(req_read[rank], data_read, myrank, nproc, 
+                put_loop(req_read[rank], data_read.get(), myrank, nproc, 
                          req_raw_win, data_raw_win);
             }
         }

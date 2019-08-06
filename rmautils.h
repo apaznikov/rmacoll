@@ -207,7 +207,7 @@ public:
 
             remove_from_list();
 
-            // MPI_Win_free(win.get());
+            MPI_Win_free(win.get());
             
             is_init = false;
         }
@@ -259,7 +259,7 @@ private:
     // std::shared_ptr<MPI_Win> win = std::make_shared<MPI_Win>(MPI_WIN_NULL);
     std::shared_ptr<MPI_Win> win = std::shared_ptr<MPI_Win>(new MPI_Win,
             [](auto w) { 
-                MPI_Win_free(w); 
+                // MPI_Win_free(w); 
                 delete w;
             });
 

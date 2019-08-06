@@ -34,8 +34,13 @@ std::function<int(const void*, int, MPI_Datatype, MPI_Aint,
 using bcast_buf_t = int;
 const auto bcast_root = 0;
 
-const auto bcast_buf_size_min = 100'000;
-const auto bcast_buf_size_max = 2'000'000;
+// For tests
+// const auto bcast_buf_size_min = 100'000;
+// const auto bcast_buf_size_max = 2'000'000;
+// const auto bcast_buf_size_step = 100'000;
+
+const auto bcast_buf_size_min = 20'000'000;
+const auto bcast_buf_size_max = 20'000'000;
 const auto bcast_buf_size_step = 100'000;
 
 const auto ntimes = 10;
