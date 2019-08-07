@@ -2,19 +2,26 @@
 
 TASKJOB=slurm.job
 
-NNODES=6
-PPN=8
+NNODES=4
 
 BCAST_TYPES="linear binomial"
+
+if [ -x "$(command -v sbatch)" ]; then
+    cmd=sbatch
+    batch=slurm
+elif [ -x "$(command -v qsub)" ]; then 
+    cmd=qsub
+    batch=torque
+fi
 
 [ ! -d "results" ] && mkdir results
 
 for ((nnodes = 1; nnodes <= NNODES; nnodes++)); do
     for bcast_type in $BCAST_TYPES; do
-        cat slurm.job | sed "s/rmacoll.*$/rmacoll $bcast_type/" \
-                      | sed "s/nodes=[0-9]\+/nodes=$nnodes/" > slurm.job.tmp
-        sbatch slurm.job.tmp
+        cat $batch.job | sed "s/rmacoll.*$/rmacoll $bcast_type/" \
+                       | sed "s/nodes=[0-9]\+/nodes=$nnodes/" > $batch.job.tmp
+        $cmd $batch.job.tmp
     done
 done
 
-rm slurm.job.tmp
+rm $batch.job.tmp

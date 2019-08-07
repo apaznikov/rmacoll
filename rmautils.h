@@ -22,16 +22,20 @@ const win_id_t MPI_WIN_NO_ID = -1;
 
 extern win_id_t last_wid;
 
-// using winlist_t = std::map<win_id_t, MPI_Win*>;
-using winlist_t = std::map<win_id_t, std::shared_ptr<MPI_Win>>;
+struct winlist_item_t {
+    std::shared_ptr<MPI_Win> win_sptr;
+    std::shared_ptr<void> bufptr;
+};
+
+// using winlist_t = std::map<win_id_t, std::shared_ptr<MPI_Win>>;
+using winlist_t = std::map<win_id_t, winlist_item_t>;
+
 extern winlist_t winlist;
 
 extern std::mutex winlock;
 
 // Find window by window's id
-// bool find_win(win_id_t id, MPI_Win **win);
-// bool find_win(win_id_t id, std::shared_ptr<MPI_Win> win);
-bool find_win(win_id_t id, std::shared_ptr<MPI_Win> &win);
+bool find_win(win_id_t id, winlist_item_t &item);
 
 // RMA_Lock_guard: RAII implementation of MPI_Win_lock/MPI_Win_unlock
 class RMA_Lock_guard
@@ -256,12 +260,14 @@ private:
     }
 
     // std::unique_ptr<MPI_Win> win = std::make_unique<MPI_Win>(MPI_WIN_NULL);
-    // std::shared_ptr<MPI_Win> win = std::make_shared<MPI_Win>(MPI_WIN_NULL);
-    std::shared_ptr<MPI_Win> win = std::shared_ptr<MPI_Win>(new MPI_Win,
-            [](auto w) { 
-                // MPI_Win_free(w); 
-                delete w;
-            });
+
+    std::shared_ptr<MPI_Win> win = std::make_shared<MPI_Win>(MPI_WIN_NULL);
+
+    // std::shared_ptr<MPI_Win> win = std::shared_ptr<MPI_Win>(new MPI_Win,
+    //         [](auto w) { 
+    //             // MPI_Win_free(w); 
+    //             delete w;
+    //         });
 
     std::shared_ptr<T[]> ptr;
 
@@ -297,8 +303,12 @@ private:
         //           << (void *) win.get() << std::endl;
 
         // winlist.insert(std::pair<win_id_t, MPI_Win*>(id, win.get())); 
-        winlist.insert(std::pair<win_id_t, 
-                                 std::shared_ptr<MPI_Win>>(id, win)); 
+
+        winlist_item_t item;
+        item.bufptr = ptr;
+        item.win_sptr = win;
+
+        winlist.insert(std::pair<win_id_t, winlist_item_t>(id, item)); 
 
 
         // Debug -- begin

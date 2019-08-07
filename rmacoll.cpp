@@ -39,11 +39,20 @@ const auto bcast_root = 0;
 // const auto bcast_buf_size_max = 2'000'000;
 // const auto bcast_buf_size_step = 100'000;
 
-const auto bcast_buf_size_min = 20'000'000;
-const auto bcast_buf_size_max = 20'000'000;
+// For light test
+const auto bcast_buf_size_min = 10'000'000;
+const auto bcast_buf_size_max = 10'000'000;
 const auto bcast_buf_size_step = 100'000;
 
 const auto ntimes = 10;
+
+// For debug
+// #define _DEBUG
+// const auto bcast_buf_size_min = 10;
+// const auto bcast_buf_size_max = 10;
+// const auto bcast_buf_size_step = 10;
+// 
+// const auto ntimes = 1;
 
 const auto bcast_val = 100;
 
@@ -94,16 +103,13 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
         }
         MPI_Barrier(comm);
 
-        double tsum = 0;
+        auto tbegin = MPI_Wtime();
 
         for (auto i = 0; i < ntimes; i++) {
-            double tbegin = 0, tend = 0;
 
             if (myrank == root) {
                 // Create and init buf for bcast ("from buf" - on root)
                 std::vector<bcast_buf_t> bcast_buf(bcast_buf_size, bcast_val);
-
-                tbegin = MPI_Wtime();
 
                 bcast_func(bcast_buf.data(), scoped_win.get_count(), MPI_INT, 0,
                            scoped_win.get_count(), MPI_INT, 
@@ -111,25 +117,31 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
                            MPI_COMM_WORLD);
             }
 
-            if (myrank == root) {
-                if (bcast_type == binomial)
+            if (bcast_type == binomial) {
+                if (myrank == root)  {
+                    auto t1 = MPI_Wtime();
+
                     RMA_Bcast_flush();
-                tend = MPI_Wtime();
-                tsum += tend - tbegin;
-                std::cout << "i = " << i << " " << tend - tbegin << std::endl;
-            }
+
+                    auto t2 = MPI_Wtime();
+                    std::cout << "1F " << t2 - t1 << std::endl;
+                }
+            } 
         }
 
         if (myrank == root) {
-            auto tavg = tsum / ntimes;
-            std::cout << "Elapsed time (bufsize = " << bcast_buf_size 
-                      << " bcast_type = " << bcast_type << "): " 
+            auto tend = MPI_Wtime();
+            auto tavg = (tend - tbegin) / ntimes;
+            auto bcast_type_str = bcast_type == linear ? "linear": "binomial";
+            std::cout << "Elapsed time (nproc = "
+                      << nproc << ", bufsize = " << bcast_buf_size 
+                      << " bcast_type = " << bcast_type_str << "): " 
                       << tavg << std::endl;
 
             datafile << bcast_buf_size << "\t" << tavg << std::endl;
         }
 
-        MPI_Barrier(MPI_COMM_WORLD);
+        MPI_Barrier(comm);
 
 #ifdef _DEBUG
         if (myrank != root) {

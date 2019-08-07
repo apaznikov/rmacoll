@@ -21,7 +21,7 @@
 
 // #define _DEBUG
 
-const auto waiter_timeout = 100;
+const auto waiter_timeout = 5000;
 
 extern int myrank;
 extern int nproc;
@@ -42,7 +42,7 @@ int RMA_Bcast_flush();
 int RMA_Bcast_test(bool &done);
 
 // Default buffer size
-const auto BUFCOUNT = 20'000'000;
+const auto BUFCOUNT = 10'000'000;
 
 // Operation request 
 struct req_t {
@@ -105,9 +105,14 @@ public:
         data_win_g.init(nproc, comm);
 
         // Init RMA window for complete flags
-        doneflag_win_g.init(nproc, comm);
+        // doneflag_win_g.init(nproc, comm);
 
-        set_doneflags(true);
+        // Init window for complete counter
+        donecntr_win_g.init(1, comm);
+
+        set_donecntr(nproc - 1);
+
+        // set_doneflags(true);
 
         set_ops();
 
@@ -115,14 +120,19 @@ public:
                 (&waiter_c::waiter_loop, this));
     }
 
-    void set_doneflags(bool val)
-    {
-        auto doneflag_arr = doneflag_win_g.get_ptr();
-        for (auto rank = 0; rank < nproc; rank++)
-            doneflag_arr[rank] = val;
-        doneflag_arr[myrank] = true;
-    }
+    // void set_doneflags(bool val)
+    // {
+    //     auto doneflag_arr = doneflag_win_g.get_ptr();
+    //     for (auto rank = 0; rank < nproc; rank++)
+    //         doneflag_arr[rank] = val;
+    //     doneflag_arr[myrank] = true;
+    // }
 
+    // set_donecntr: Set done counter to val
+    void set_donecntr(int val)
+    {
+        *donecntr_win_g.get_ptr() = val;
+    }
 
     // term: Terminate waiter thread
     void term()
@@ -143,9 +153,9 @@ public:
     }
     
     // get_winguard: Get win guard for done flag
-    MPI_Win &get_doneflagwin()
+    MPI_Win &get_donecntrwin()
     {
-        return doneflag_win_g.get_win();
+        return donecntr_win_g.get_win();
     }
 
     auto &get_fut()
@@ -187,7 +197,10 @@ private:
     RMA_Win_guard<data_t> data_win_g;
 
     // Array of complete flags
-    RMA_Win_guard<bool> doneflag_win_g;
+    // RMA_Win_guard<bool> doneflag_win_g;
+
+    // Counter of completed processes
+    RMA_Win_guard<int> donecntr_win_g;
 
     boost::scoped_thread<> waiter_thr;
 

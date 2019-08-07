@@ -16,6 +16,8 @@ std::weak_ptr<waiter_c> waiter_weak_ptr;
 // Avoid global variables?
 // waiter_c waiter;
 
+// #define _DEBUG
+
 template <typename T>
 static void printbin(T val)
 {
@@ -37,27 +39,34 @@ int comp_rank(int srank, int root, int nproc)
 
 
 // bcast_isdone: Read and check flag array
-bool bcast_isdone(int nproc, int myrank, bool doneflags[], 
-                      MPI_Win &doneflag_win)
+bool bcast_isdone(int nproc, int myrank, MPI_Win &donecntr_win)
 {
-    MPI_Get_accumulate(NULL, 0, MPI_BYTE,
-                       doneflags, nproc,
-                       MPI_BYTE, myrank, 0, nproc, MPI_BYTE, MPI_NO_OP,
-                       doneflag_win);
+    int read_cntr = 0;
+    MPI_Fetch_and_op(NULL, &read_cntr, MPI_INT, myrank, 0, MPI_NO_OP, 
+                     donecntr_win);
 
-    MPI_Win_flush(myrank, doneflag_win);
+    if (read_cntr == nproc - 1)
+        return true;
+    else
+        return false;
+
+    // MPI_Get_accumulate(NULL, 0, MPI_BYTE,
+    //                    doneflags, nproc,
+    //                    MPI_BYTE, myrank, 0, nproc, MPI_BYTE, MPI_NO_OP,
+    //                    doneflag_win);
+
+    // MPI_Win_flush(myrank, doneflag_win);
 
     // std::cout << myrank << "R doneflags " << nproc << " ";
-    for (auto i = 0; i < nproc; i++) {
-        // std::cout << doneflags[i] << " ";
-        if (doneflags[i] == false) {
-            // std::cout << std::endl;
-            return false;
-        }
-    }
+    // for (auto i = 0; i < nproc; i++) {
+    //     // std::cout << doneflags[i] << " ";
+    //     if (doneflags[i] == false) {
+    //         // std::cout << std::endl;
+    //         return false;
+    //     }
+    // }
 
-    // std::cout << std::endl;
-    return true;
+    // return true;
 }
 
 // RMA_Bcast_test: Test if RMA bcast is done
@@ -70,16 +79,15 @@ int RMA_Bcast_test(bool &done)
         return RET_CODE_ERROR;
     }
 
-    auto &doneflag_win = sp->get_doneflagwin();
+    auto &doneflag_win = sp->get_donecntrwin();
 
     // Atomically lock myself and read doneflag array
     RMA_Lock_guard lock_root(myrank, doneflag_win);
 
     auto nproc = sp->get_nproc();
     auto myrank = sp->get_myrank();
-    bool doneflags[nproc];
 
-    done = bcast_isdone(nproc, myrank, doneflags, doneflag_win);
+    done = bcast_isdone(nproc, myrank, doneflag_win);
 
     return RET_CODE_SUCCESS;
 }
@@ -94,16 +102,17 @@ int RMA_Bcast_flush()
         return RET_CODE_ERROR;
     }
 
-    auto &doneflag_win = sp->get_doneflagwin();
+    auto &doneflag_win = sp->get_donecntrwin();
 
     // Atomically lock myself and read doneflag array
     RMA_Lock_guard lock_root(myrank, doneflag_win);
 
     auto nproc = sp->get_nproc();
     auto myrank = sp->get_myrank();
-    bool doneflags[nproc];
 
-    while (!bcast_isdone(nproc, myrank, doneflags, doneflag_win));
+    while (!bcast_isdone(nproc, myrank, doneflag_win)) {
+        usleep(10000);
+    };
 
     return RET_CODE_SUCCESS;
 }
@@ -176,7 +185,15 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
                        MPI_Win win, win_id_t wid, MPI_Comm comm)
 {
     // Wait until previous bcast is completed
+#ifdef _PROF
+    auto t1 = MPI_Wtime();
+#endif
     RMA_Bcast_flush();
+
+#ifdef _PROF
+    auto t2 = MPI_Wtime();
+    std::cout << "1 " << t2 - t1 << std::endl;
+#endif
 
     auto sp = waiter_weak_ptr.lock();
 
@@ -185,7 +202,7 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
         return RET_CODE_ERROR;
     }
 
-    sp->set_doneflags(false);
+    sp->set_donecntr(0);
 
     auto myrank = 0, nproc = 0; 
     MPI_Comm_rank(comm, &myrank);
@@ -207,10 +224,25 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
     // Copy memory to buffer
     memcpy(&data->buf, origin_addr, type_size * origin_count);
 
+#ifdef _PROF
+    auto t3 = MPI_Wtime();
+    std::cout << "2 " << t3 - t2 << std::endl;
+#endif
+
     // Wait until passive synchronization epoch starts in waiter
     sp->get_fut().wait();
 
+#ifdef _PROF
+    auto t4 = MPI_Wtime();
+    std::cout << "3 " << t4 - t3 << std::endl;
+#endif
+
     put_loop(req, data.get(), myrank, nproc, sp->get_reqwin(), sp->get_datawin());
+
+#ifdef _PROF
+    auto t5 = MPI_Wtime();
+    std::cout << "4 " << t5 - t4 << std::endl << std::endl;
+#endif
 
     return RET_CODE_SUCCESS;
 }
@@ -224,15 +256,15 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
 // Active on each thread except root.
 void waiter_c::waiter_loop()
 {
+#ifdef _PROF
+    auto t1 = MPI_Wtime();
+#endif
+
     auto req_sptr = req_win_g.get_sptr();
     auto data_sptr = data_win_g.get_sptr();
 
     auto &req_raw_win = req_win_g.get_win();
     auto &data_raw_win = data_win_g.get_win();
-
-    // Allocate data_read (array of requests for all procs)
-    // std::shared_ptr<data_t[]> data_read_sptr(new data_t[nproc]);
-    // decltype(auto) data_read = data_read_sptr.get(); // remove decltype?
 
     // Allocate and init req_read (array of operations for all procs)
     std::shared_ptr<req_t[]> req_read_sptr(new req_t[nproc]);
@@ -248,6 +280,11 @@ void waiter_c::waiter_loop()
 
     ready_prom.set_value();
 
+#ifdef _PROF
+    auto t2 = MPI_Wtime();
+    std::cout << myrank << "R 11 " << t2 - t1 << std::endl << std::endl;
+#endif
+
     while (waiter_term_flag == false) {
         // 1. Check request field
 
@@ -257,12 +294,23 @@ void waiter_c::waiter_loop()
         // Atomically read (in my memory) request array for all processes 
         const auto req_arr_sz = req_size * nproc;
 
+#ifdef _PROG
+        auto t3 = MPI_Wtime();
+#endif
+
+        // memcpy(req_read, req_sptr.get(), req_arr_sz);
+
         MPI_Get_accumulate(NULL, 0, MPI_BYTE, 
                            req_read, req_arr_sz, 
                            MPI_BYTE, myrank, 0, req_arr_sz, MPI_BYTE, MPI_NO_OP,
                            req_raw_win);
 
         MPI_Win_flush(myrank, req_raw_win);
+
+#ifdef _PROG
+        auto t4 = MPI_Wtime();
+        std::cout << myrank << "R 12 " << t4 - t3 << std::endl;
+#endif
 
         // if (myrank == 2)
         //     for (auto i = 0; i < nproc; i++) 
@@ -284,12 +332,16 @@ void waiter_c::waiter_loop()
                           // << " wid " << op_read[rank].wid << std::endl;
 #endif
 
+#ifdef _PROF
+                auto t5 = MPI_Wtime();
+#endif
+
                 // Read data from local memory
                 const auto disp = data_t_size * rank;
 
                 auto data_read = std::make_unique<data_t>();
 
-                // Get buf with specified bufsize
+                // Get data buf of specified bufsize
                 MPI_Get_accumulate(NULL, 0, MPI_BYTE, 
                                    data_read.get(), req_read[rank].bufsize, 
                                    MPI_BYTE, myrank, disp, 
@@ -304,6 +356,11 @@ void waiter_c::waiter_loop()
                                    data_raw_win);
 
                 MPI_Win_flush(myrank, data_raw_win);
+
+#ifdef _PROF
+                auto t6 = MPI_Wtime();
+                std::cout << myrank << "R 13 " << t6 - t5 << std::endl << std::endl;
+#endif
 
                 // data_sptr[0] because RMA_Win_guard always stores 
                 // shared_ptr<T[]> for now
@@ -324,12 +381,17 @@ void waiter_c::waiter_loop()
                 std::cout << std::endl;
 #endif
 
+                // Put request to all next peers
+                // TODO move to first place!
+                put_loop(req_read[rank], data_read.get(), myrank, nproc, 
+                         req_raw_win, data_raw_win);
 
                 // Copy buf to local memory
                 
                 // Search for bcast window id in the windows list
-                std::shared_ptr<MPI_Win> bcast_win;
-                auto isfound = find_win(data_read->wid, bcast_win);
+                // std::shared_ptr<MPI_Win> bcast_win;
+                winlist_item_t item;
+                auto isfound = find_win(data_read->wid, item);
 
                 if (isfound == false) {
                     std::cerr << "Window " << data_read->wid 
@@ -337,33 +399,56 @@ void waiter_c::waiter_loop()
                     MPI_Abort(MPI_COMM_WORLD, RET_CODE_ERROR);
                 }
 
+                memcpy(item.bufptr.get(), data_read->buf, req_read[rank].bufsize);
+
                 // std::cout << myrank << "R found " << (void*) bcast_win << std::endl;
 
                 // Atomically set my local value
                 // Why cannot replace with memcpy?? 
-                RMA_Lock_guard lock_myself(myrank, *bcast_win);
+                // TODO optimize: replace with memcpy
+                // RMA_Lock_guard lock_myself(myrank, *item.win_sptr);
 
-                MPI_Accumulate(&data_read->buf, 
-                               req_read[rank].bufsize, MPI_BYTE, 
-                               myrank, offset_buf, 
-                               req_read[rank].bufsize, MPI_BYTE, MPI_REPLACE, 
-                               *bcast_win);
+                // MPI_Accumulate(&data_read->buf, 
+                //                req_read[rank].bufsize, MPI_BYTE, 
+                //                myrank, offset_buf, 
+                //                req_read[rank].bufsize, MPI_BYTE, MPI_REPLACE, 
+                //                *item.win_sptr.get());
 
-                lock_myself.unlock();
+                // lock_myself.unlock();
+
+#ifdef _PROF
+                auto t8 = MPI_Wtime();
+                std::cout << myrank << "R 14 " << t8 - t6 << std::endl << std::endl;
+#endif
 
                 // Set complete flag to root
-                auto doneflag_win = doneflag_win_g.get_win();
-                RMA_Lock_guard lock_root(data_read->root, doneflag_win);
+                // auto doneflag_win = doneflag_win_g.get_win();
+                // RMA_Lock_guard lock_root(data_read->root, doneflag_win);
 
-                auto flag = true;
-                MPI_Accumulate(&flag, 1, MPI_BYTE, data_read->root, myrank, 
-                               1, MPI_BYTE, MPI_REPLACE, doneflag_win);
+                // auto flag = true;
+                // MPI_Accumulate(&flag, 1, MPI_BYTE, data_read->root, myrank, 
+                //                1, MPI_BYTE, MPI_REPLACE, doneflag_win);
+
+                auto donecntr_win = donecntr_win_g.get_win();
+                RMA_Lock_guard lock_root(data_read->root, donecntr_win);
+
+                auto val_to_incr = 1;
+                auto result = 0;
+                MPI_Fetch_and_op(&val_to_incr, &result, MPI_INT, data_read->root, 0,
+                                 MPI_SUM, donecntr_win);
 
                 lock_root.unlock();
 
-                // Put request to all next peers
-                put_loop(req_read[rank], data_read.get(), myrank, nproc, 
-                         req_raw_win, data_raw_win);
+#ifdef _PROF
+                auto t9 = MPI_Wtime();
+                std::cout << myrank << "R 15 " << t9 - t8 << std::endl << std::endl;
+#endif
+
+
+#ifdef _PROF
+                auto t10 = MPI_Wtime();
+                std::cout << myrank << "R 16 " << t10 - t9 << std::endl << std::endl;
+#endif
             }
         }
 
