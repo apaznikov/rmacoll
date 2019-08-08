@@ -43,14 +43,18 @@ const auto bcast_root = 0;
 const auto bcast_buf_size_min = 10'000'000;
 const auto bcast_buf_size_max = 10'000'000;
 const auto bcast_buf_size_step = 100'000;
+const auto warmup_flag = false;
+const auto warmup_ntimes = 2;
 
-const auto ntimes = 10;
+const auto ntimes = 2;
 
 // For debug
 // #define _DEBUG
 // const auto bcast_buf_size_min = 10;
 // const auto bcast_buf_size_max = 10;
 // const auto bcast_buf_size_step = 10;
+// const auto warmup_flag = false;
+// const auto warmup_ntimes = 5;
 // 
 // const auto ntimes = 1;
 
@@ -101,22 +105,47 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
             std::cout << myrank << "R BEFORE\t" << raw_ptr[0] << std::endl;
 #endif
         }
+
+        // Create and init buf for bcast ("from buf" - on root)
+        auto bcast_buf_alloc_size = bcast_buf_size;
+        if (myrank != root)
+            bcast_buf_alloc_size = 0;
+
+        std::vector<bcast_buf_t> bcast_buf(bcast_buf_alloc_size, bcast_val);
         MPI_Barrier(comm);
+
+        if (warmup_flag == true) {
+            for (auto i = 0; i < warmup_ntimes; i++) {
+
+                if (myrank == root) {
+                    bcast_func(bcast_buf.data(), scoped_win.get_count(), 
+                               MPI_INT, 0, scoped_win.get_count(), MPI_INT, 
+                               scoped_win.get_win(), scoped_win.get_id(), 
+                               MPI_COMM_WORLD);
+                }
+
+                if (bcast_type == binomial) {
+                    if (myrank == root)  {
+                        RMA_Bcast_flush();
+                    }
+                } 
+            }
+        }
 
         auto tbegin = MPI_Wtime();
 
         for (auto i = 0; i < ntimes; i++) {
 
-            if (myrank == root) {
-                // Create and init buf for bcast ("from buf" - on root)
-                std::vector<bcast_buf_t> bcast_buf(bcast_buf_size, bcast_val);
+            auto ti1 = MPI_Wtime();
 
+            if (myrank == root) {
                 bcast_func(bcast_buf.data(), scoped_win.get_count(), MPI_INT, 0,
                            scoped_win.get_count(), MPI_INT, 
                            scoped_win.get_win(), scoped_win.get_id(), 
                            MPI_COMM_WORLD);
             }
 
+            // If binomial broadcast, call flush
             if (bcast_type == binomial) {
                 if (myrank == root)  {
                     auto t1 = MPI_Wtime();
@@ -124,9 +153,16 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
                     RMA_Bcast_flush();
 
                     auto t2 = MPI_Wtime();
-                    std::cout << "1F " << t2 - t1 << std::endl;
+                    std::cout << "i = " << i << " FLUSH " << t2 - t1 
+                              << std::endl;
                 }
             } 
+
+            if (myrank == root) {
+                auto ti2 = MPI_Wtime();
+                std::cout << "i = " << i << " " << ti2 - ti1 << std::endl;
+            }
+            
         }
 
         if (myrank == root) {
