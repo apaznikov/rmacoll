@@ -18,6 +18,13 @@ std::weak_ptr<waiter_c> waiter_weak_ptr;
 
 // #define _DEBUG
 
+// Auxiliary structure to avoid buffering in the root process
+struct data_ptr_t {
+    int *buf = nullptr;
+    int root = -1;
+    win_id_t wid = MPI_WIN_NO_ID;
+};
+
 template <typename T>
 static void printbin(T val)
 {
@@ -49,24 +56,6 @@ bool bcast_isdone(int nproc, int myrank, MPI_Win &donecntr_win)
         return true;
     else
         return false;
-
-    // MPI_Get_accumulate(NULL, 0, MPI_BYTE,
-    //                    doneflags, nproc,
-    //                    MPI_BYTE, myrank, 0, nproc, MPI_BYTE, MPI_NO_OP,
-    //                    doneflag_win);
-
-    // MPI_Win_flush(myrank, doneflag_win);
-
-    // std::cout << myrank << "R doneflags " << nproc << " ";
-    // for (auto i = 0; i < nproc; i++) {
-    //     // std::cout << doneflags[i] << " ";
-    //     if (doneflags[i] == false) {
-    //         // std::cout << std::endl;
-    //         return false;
-    //     }
-    // }
-
-    // return true;
 }
 
 // RMA_Bcast_test: Test if RMA bcast is done
@@ -111,38 +100,35 @@ int RMA_Bcast_flush()
     auto myrank = sp->get_myrank();
 
     while (!bcast_isdone(nproc, myrank, doneflag_win)) {
-        usleep(100);
+        usleep(flush_timeout);
     };
 
     return RET_CODE_SUCCESS;
 }
 
 // put_request: Put request and data into remote memory
-static void put_request(const req_t &req, data_t *data, int rank, int root, 
-                        const MPI_Win &req_win, const MPI_Win &data_win)
+static void put_request(const req_t &req, const data_ptr_t &data, int rank, 
+                        int root, const MPI_Win &req_win, 
+                        const MPI_Win &data_win)
 {
     auto disp = data_t_size * root;
 #ifdef _DEBUG
     std::cout << "disp " << disp << " bufsize " << req.bufsize
               << " data " << data->buf[0] << std::endl;
 #endif
+    auto t4 = MPI_Wtime();
 
     // Put data
-    // TODO devide into Acc for buf and root, wid
-    // MPI_Accumulate(data, req.bufsize, MPI_BYTE, rank, disp, req.bufsize, 
-    //                MPI_BYTE, MPI_REPLACE, data_win);
-
-    // MPI_Accumulate(&data->root, root_wid_size, MPI_BYTE, rank, 
-    //                disp + offset_root_wid, root_wid_size, MPI_BYTE, 
-    //                MPI_REPLACE, data_win);
-
-    MPI_Put(data, req.bufsize, MPI_BYTE, rank, disp, req.bufsize, MPI_BYTE, 
+    MPI_Put(data.buf, req.bufsize, MPI_BYTE, rank, disp, req.bufsize, MPI_BYTE, 
             data_win);
 
-    MPI_Put(&data->root, root_wid_size, MPI_BYTE, rank, disp + offset_root_wid,
+    MPI_Put(&data.root, root_wid_size, MPI_BYTE, rank, disp + offset_root_wid,
             root_wid_size, MPI_BYTE, data_win);
 
     MPI_Win_flush(rank, data_win);
+
+    auto t5 = MPI_Wtime();
+    std::cout << myrank << "R PUT " << t5 - t4 << std::endl;
 
     // Put request (flag) into remote memory
     disp = req_size * root;
@@ -150,15 +136,17 @@ static void put_request(const req_t &req, data_t *data, int rank, int root,
                    MPI_REPLACE, req_win);
 
     MPI_Win_flush(rank, req_win);
+
+    auto t6 = MPI_Wtime();
+    std::cout << myrank << "R ACC " << t6 - t5 << std::endl;
 }
 
 // Put requests to all peers
-static void put_loop(const req_t &req, data_t *data, int myrank, int nproc, 
-                     const MPI_Win &req_win, const MPI_Win &data_win)
+static void put_loop(const req_t &req, const data_ptr_t &data, 
+                     int myrank, int nproc, const MPI_Win &req_win, 
+                     const MPI_Win &data_win)
 {
-    auto t5 = MPI_Wtime();
-
-    auto srank = comp_srank(myrank, data->root, nproc);
+    auto srank = comp_srank(myrank, data.root, nproc);
 
     auto mask = 1;
 
@@ -167,12 +155,12 @@ static void put_loop(const req_t &req, data_t *data, int myrank, int nproc,
             // Put (send) data to the next process if bit is not set
             auto put_rank = srank | mask;
             if (put_rank < nproc) {
-                put_rank = comp_rank(put_rank, data->root, nproc);
+                put_rank = comp_rank(put_rank, data.root, nproc);
 #ifdef _DEBUG
                 std::cout << myrank << "R\tPUT to " << put_rank << std::endl;
 #endif
 
-                put_request(req, data, put_rank, data->root, req_win, data_win);
+                put_request(req, data, put_rank, data.root, req_win, data_win);
             }
         } else {
             // If bit is set, break 
@@ -182,10 +170,6 @@ static void put_loop(const req_t &req, data_t *data, int myrank, int nproc,
 
         mask = mask << 1;
     }
-
-    auto t6 = MPI_Wtime();
-
-    std::cout << myrank << "R PUTLOOP " << t6 - t5 << std::endl;
 }
 
 // RMA_Bcast_binomial: Binomial tree broadcast
@@ -199,11 +183,6 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
     // Wait until previous bcast is completed
     auto t1 = MPI_Wtime();
     RMA_Bcast_flush();
-
-#ifdef _PROF
-    auto t2 = MPI_Wtime();
-    std::cout << "1 " << t2 - t1 << std::endl;
-#endif
 
     auto sp = waiter_weak_ptr.lock();
 
@@ -226,22 +205,6 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
     req.op = req_t::op_t::bcast;
     req.bufsize = origin_count * type_size;
 
-    auto t2 = MPI_Wtime();
-
-    // Set data fields
-    auto data = std::make_unique<data_t>();
-    data->root = myrank;
-    data->wid = wid;
-
-    auto t3 = MPI_Wtime();
-    std::cout << myrank << "R UNIQ " << t3 - t2 << std::endl;
-
-    // Copy memory to buffer
-    memcpy(&data->buf, origin_addr, type_size * origin_count);
-
-    auto t8 = MPI_Wtime();
-    std::cout << myrank << "R FIRST COPY " << t8 - t3 << std::endl;
-
     // Wait until passive synchronization epoch starts in waiter
     sp->get_fut().wait();
 
@@ -249,10 +212,17 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
     auto t4 = MPI_Wtime();
 #endif
 
-    put_loop(req, data.get(), myrank, nproc, sp->get_reqwin(), sp->get_datawin());
+    // Auxiliary structure to store pointer to the buffer
+    data_ptr_t data_ptr;
+
+    data_ptr.buf = (buf_dtype *) origin_addr;
+    data_ptr.root = myrank;
+    data_ptr.wid = wid;
 
     auto t5 = MPI_Wtime();
-    std::cout << myrank << "R WHOLE " << t5 - t1 << std::endl;
+    std::cout << myrank << "R WHOLE NO LOOP " << t5 - t1 << std::endl;
+
+    put_loop(req, data_ptr, myrank, nproc, sp->get_reqwin(), sp->get_datawin());
 
     return RET_CODE_SUCCESS;
 }
@@ -266,10 +236,6 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
 // Active on each thread except root.
 void waiter_c::waiter_loop()
 {
-#ifdef _PROF
-    auto t1 = MPI_Wtime();
-#endif
-
     auto req_sptr = req_win_g.get_sptr();
     auto data_sptr = data_win_g.get_sptr();
 
@@ -304,11 +270,12 @@ void waiter_c::waiter_loop()
         // Atomically read (in my memory) request array for all processes 
         const auto req_arr_sz = req_size * nproc;
 
-#ifdef _PROG
-        auto t3 = MPI_Wtime();
-#endif
+        // auto t3 = MPI_Wtime();
 
         // memcpy(req_read, req_sptr.get(), req_arr_sz);
+
+        // auto t4 = MPI_Wtime();
+        // std::cout << myrank << "R MEMCPY " << t4 - t3 << std::endl;
 
         MPI_Get_accumulate(NULL, 0, MPI_BYTE, 
                            req_read, req_arr_sz, 
@@ -317,14 +284,8 @@ void waiter_c::waiter_loop()
 
         MPI_Win_flush(myrank, req_raw_win);
 
-#ifdef _PROG
-        auto t4 = MPI_Wtime();
-        std::cout << myrank << "R 12 " << t4 - t3 << std::endl;
-#endif
-
-        // if (myrank == 2)
-        //     for (auto i = 0; i < nproc; i++) 
-        //         std::cout << myrank << "R " << i << " " << req_read[i].op << std::endl;
+        // auto t5 = MPI_Wtime();
+        // std::cout << myrank << "R GET REQ " << t5 - t4 << std::endl;
 
         // 1. Look through request array and find all requests
         // 2. Get data for active requests
@@ -342,55 +303,6 @@ void waiter_c::waiter_loop()
                           // << " wid " << op_read[rank].wid << std::endl;
 #endif
 
-#ifdef _PROF
-                auto t5 = MPI_Wtime();
-#endif
-
-                // Read data from local memory
-                // const auto disp = data_t_size * rank;
-
-                // auto t8 = MPI_Wtime();
-
-                // auto data_read = std::make_unique<data_t>();
-
-                // Get data buf of specified bufsize
-                // MPI_Get_accumulate(NULL, 0, MPI_BYTE, 
-                //                    data_read.get(), req_read[rank].bufsize, 
-                //                    MPI_BYTE, myrank, disp, 
-                //                    req_read[rank].bufsize, MPI_BYTE, 
-                //                    MPI_NO_OP, data_raw_win);
-
-                // MPI_Get(data_read.get(), req_read[rank].bufsize, 
-                //         MPI_BYTE, myrank, disp, 
-                //         req_read[rank].bufsize, MPI_BYTE, data_raw_win);
-
-                // memcpy(data_read.get(), &data_sptr[0], req_read[rank].bufsize);
-
-                // Get root and wid
-                // MPI_Get_accumulate(NULL, 0, MPI_BYTE, 
-                //                    &data_read->root, root_wid_size, 
-                //                    MPI_BYTE, myrank, disp + offset_root_wid, 
-                //                    root_wid_size, MPI_BYTE, MPI_NO_OP, 
-                //                    data_raw_win);
-
-                // MPI_Get(&data_read->root, root_wid_size,
-                //         MPI_BYTE, myrank, disp + offset_root_wid,
-                //         root_wid_size, MPI_BYTE, data_raw_win);
-
-                // memcpy(&data_read->root, &data_sptr[0].root, root_wid_size);
-
-                // MPI_Win_flush(myrank, data_raw_win);
-
-                // auto t9 = MPI_Wtime();
-                // std::cout << myrank << "R g " << t9 - t8 << std::endl;
-
-#ifdef _PROF
-                auto t6 = MPI_Wtime();
-                std::cout << myrank << "R 13 " << t6 - t5 << std::endl << std::endl;
-#endif
-
-                // data_sptr[0] because RMA_Win_guard always stores 
-                // shared_ptr<T[]> for now
 #ifdef _DEBUG
                 std::cout << myrank << "R buf = " << data_read->buf[0]
                           << " sptrbuf " << data_sptr[rank].buf[0] 
@@ -407,13 +319,24 @@ void waiter_c::waiter_loop()
                     std::cout << data_sptr[rank].buf[i] << " ";
                 std::cout << std::endl;
 #endif
+                auto t5 = MPI_Wtime();
 
-                // Put request to all next peers
                 // put_loop(req_read[rank], data_read.get(), myrank, nproc, 
                 //          req_raw_win, data_raw_win);
 
-                put_loop(req_read[rank], &data_sptr[rank], myrank, nproc, 
+                // Auxiliary structure to store pointer to the buffer
+                data_ptr_t data_ptr;
+
+                data_ptr.buf = data_sptr[rank].buf;
+                data_ptr.root = data_sptr[rank].root;
+                data_ptr.wid = data_sptr[rank].wid;
+
+                // Put request to all next peers
+                put_loop(req_read[rank], data_ptr, myrank, nproc, 
                          req_raw_win, data_raw_win);
+
+                auto t6 = MPI_Wtime();
+                std::cout << myrank << "R PUTLOOP " << t6 - t5 << std::endl;
 
                 // Copy buf to local memory
                 
@@ -428,40 +351,13 @@ void waiter_c::waiter_loop()
                     MPI_Abort(MPI_COMM_WORLD, RET_CODE_ERROR);
                 }
 
-                auto t1 = MPI_Wtime();
+                auto t7 = MPI_Wtime();
+                std::cout << myrank << "R FIND " << t7 - t6 << std::endl;
 
                 memcpy(item.bufptr.get(), data_sptr[rank].buf, req_read[rank].bufsize);
 
-                auto t2 = MPI_Wtime();
-                std::cout << myrank << "R cpy " << t2 - t1 << std::endl;
-
-                // std::cout << myrank << "R found " << (void*) bcast_win << std::endl;
-
-                // Atomically set my local value
-                // Why cannot replace with memcpy?? 
-                // TODO optimize: replace with memcpy
-                // RMA_Lock_guard lock_myself(myrank, *item.win_sptr);
-
-                // MPI_Accumulate(&data_read->buf, 
-                //                req_read[rank].bufsize, MPI_BYTE, 
-                //                myrank, offset_buf, 
-                //                req_read[rank].bufsize, MPI_BYTE, MPI_REPLACE, 
-                //                *item.win_sptr.get());
-
-                // lock_myself.unlock();
-
-#ifdef _PROF
-                auto t8 = MPI_Wtime();
-                std::cout << myrank << "R 14 " << t8 - t6 << std::endl << std::endl;
-#endif
-
-                // Set complete flag to root
-                // auto doneflag_win = doneflag_win_g.get_win();
-                // RMA_Lock_guard lock_root(data_read->root, doneflag_win);
-
-                // auto flag = true;
-                // MPI_Accumulate(&flag, 1, MPI_BYTE, data_read->root, myrank, 
-                //                1, MPI_BYTE, MPI_REPLACE, doneflag_win);
+                auto t9 = MPI_Wtime();
+                std::cout << myrank << "R CPY " << t9 - t7 << std::endl;
 
                 auto donecntr_win = donecntr_win_g.get_win();
                 RMA_Lock_guard lock_root(data_sptr[rank].root, donecntr_win);
@@ -473,16 +369,8 @@ void waiter_c::waiter_loop()
 
                 lock_root.unlock();
 
-#ifdef _PROF
-                auto t9 = MPI_Wtime();
-                std::cout << myrank << "R 15 " << t9 - t8 << std::endl << std::endl;
-#endif
-
-
-#ifdef _PROF
                 auto t10 = MPI_Wtime();
-                std::cout << myrank << "R 16 " << t10 - t9 << std::endl << std::endl;
-#endif
+                std::cout << myrank << "R FOP " << t10 - t9 << std::endl;
             }
         }
 

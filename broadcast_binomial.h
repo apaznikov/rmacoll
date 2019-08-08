@@ -21,7 +21,8 @@
 
 // #define _DEBUG
 
-const auto waiter_timeout = 5000;
+const auto waiter_timeout = 1000;
+const auto flush_timeout  = 1000;
 
 extern int myrank;
 extern int nproc;
@@ -52,11 +53,13 @@ struct req_t {
     // Buf size for current message (in bytes)
     int bufsize;
 };
+
+using buf_dtype = int;
     
 // Data for operation
 struct data_t {
     // Buffer to put/get
-    int buf[BUFCOUNT];
+    buf_dtype buf[BUFCOUNT];
 
     // Root (for collectives with root)
     int root = -1;

@@ -40,23 +40,23 @@ const auto bcast_root = 0;
 // const auto bcast_buf_size_step = 100'000;
 
 // For light test
-const auto bcast_buf_size_min = 10'000'000;
-const auto bcast_buf_size_max = 10'000'000;
-const auto bcast_buf_size_step = 100'000;
-const auto warmup_flag = false;
-const auto warmup_ntimes = 2;
-
-const auto ntimes = 2;
-
-// For debug
-// #define _DEBUG
-// const auto bcast_buf_size_min = 10;
-// const auto bcast_buf_size_max = 10;
-// const auto bcast_buf_size_step = 10;
-// const auto warmup_flag = false;
+// const auto bcast_buf_size_min = 5'000'000;
+// const auto bcast_buf_size_max = 5'000'000;
+// const auto bcast_buf_size_step = 100'000;
+// const auto warmup_flag = true;
 // const auto warmup_ntimes = 5;
 // 
-// const auto ntimes = 1;
+// const auto ntimes = 10;
+
+// For debug
+#define _DEBUG
+const auto bcast_buf_size_min = 10;
+const auto bcast_buf_size_max = 10;
+const auto bcast_buf_size_step = 10;
+const auto warmup_flag = false;
+const auto warmup_ntimes = 0;
+
+const auto ntimes = 1;
 
 const auto bcast_val = 100;
 
@@ -148,19 +148,20 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
             // If binomial broadcast, call flush
             if (bcast_type == binomial) {
                 if (myrank == root)  {
-                    auto t1 = MPI_Wtime();
+                    // auto t1 = MPI_Wtime();
 
                     RMA_Bcast_flush();
 
-                    auto t2 = MPI_Wtime();
-                    std::cout << "i = " << i << " FLUSH " << t2 - t1 
-                              << std::endl;
+                    // auto t2 = MPI_Wtime();
+                    // std::cout << "i = " << i << " FLUSH " << t2 - t1 
+                    //           << std::endl;
                 }
             } 
 
             if (myrank == root) {
                 auto ti2 = MPI_Wtime();
-                std::cout << "i = " << i << " " << ti2 - ti1 << std::endl;
+                std::cout << "i = " << i << " " << ti2 - ti1 << std::endl
+                          << std::endl;
             }
             
         }
