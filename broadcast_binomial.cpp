@@ -18,12 +18,12 @@ std::weak_ptr<waiter_c> waiter_weak_ptr;
 
 // #define _DEBUG
 
-// Auxiliary structure to avoid buffering in the root process
-struct data_ptr_t {
-    int *buf = nullptr;
-    int root = -1;
-    win_id_t wid = MPI_WIN_NO_ID;
-};
+// // Auxiliary structure to avoid buffering in the root process
+// struct data_ptr_t {
+//     buf_dtype *buf = nullptr;
+//     int root = -1;
+//     win_id_t wid = MPI_WIN_NO_ID;
+// };
 
 template <typename T>
 static void printbin(T val)
@@ -107,9 +107,12 @@ int RMA_Bcast_flush()
 }
 
 // put_request: Put request and data into remote memory
-static void put_request(const req_t &req, const data_ptr_t &data, int rank, 
-                        int root, const MPI_Win &req_win, 
-                        const MPI_Win &data_win)
+static void put_request(const req_t &req, buf_dtype *buf, 
+                        int rank, int root,
+                        const MPI_Win &req_win, 
+                        const MPI_Win &data_win,
+                        const MPI_Win &bcast_win,
+                        win_id_t bcast_wid)
 {
     auto disp = data_t_size * root;
 #ifdef _DEBUG
@@ -118,12 +121,22 @@ static void put_request(const req_t &req, const data_ptr_t &data, int rank,
 #endif
     auto t4 = MPI_Wtime();
 
-    // Put data
-    MPI_Put(data.buf, req.bufsize, MPI_BYTE, rank, disp, req.bufsize, MPI_BYTE, 
-            data_win);
+    std::cout << myrank << "R CHECK " << buf[0] << " " << buf[1] << std::endl;
 
-    MPI_Put(&data.root, root_wid_size, MPI_BYTE, rank, disp + offset_root_wid,
-            root_wid_size, MPI_BYTE, data_win);
+    // Put data
+    // MPI_Put(data.buf, req.bufsize, MPI_BYTE, rank, disp, req.bufsize, MPI_BYTE, 
+    //         data_win);
+    MPI_Put(buf, req.bufsize, MPI_BYTE, rank, disp, 
+            req.bufsize, MPI_BYTE, bcast_win);
+
+    MPI_Win_flush(rank, bcast_win);
+
+    data_t data;
+    data.root = root;
+    data.wid = bcast_wid;
+
+    MPI_Put(&data, sizeof(data_t), MPI_BYTE, rank, 0, 
+            sizeof(data_t), MPI_BYTE, data_win);
 
     MPI_Win_flush(rank, data_win);
 
@@ -142,11 +155,17 @@ static void put_request(const req_t &req, const data_ptr_t &data, int rank,
 }
 
 // Put requests to all peers
-static void put_loop(const req_t &req, const data_ptr_t &data, 
-                     int myrank, int nproc, const MPI_Win &req_win, 
-                     const MPI_Win &data_win)
+static void put_loop(const req_t &req, buf_dtype *buf, 
+                     int myrank, int root, int nproc, 
+                     const MPI_Win &req_win, 
+                     const MPI_Win &data_win,
+                     MPI_Win &bcast_win,
+                     win_id_t bcast_wid)
 {
-    auto srank = comp_srank(myrank, data.root, nproc);
+    RMA_Lock_guard lock_all_waiters_data(bcast_win);
+
+    // Main binomial tree algorithm
+    auto srank = comp_srank(myrank, root, nproc);
 
     auto mask = 1;
 
@@ -155,16 +174,17 @@ static void put_loop(const req_t &req, const data_ptr_t &data,
             // Put (send) data to the next process if bit is not set
             auto put_rank = srank | mask;
             if (put_rank < nproc) {
-                put_rank = comp_rank(put_rank, data.root, nproc);
+                put_rank = comp_rank(put_rank, root, nproc);
 #ifdef _DEBUG
                 std::cout << myrank << "R\tPUT to " << put_rank << std::endl;
 #endif
 
-                put_request(req, data, put_rank, data.root, req_win, data_win);
+                put_request(req, buf, put_rank, root, 
+                            req_win, data_win, bcast_win, bcast_wid);
             }
         } else {
             // If bit is set, break 
-            // (in original non-rma algorithm it's receive phase)
+            // (in original non-RMA algorithm it's the receive phase)
             break;
         }
 
@@ -212,17 +232,13 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
     auto t4 = MPI_Wtime();
 #endif
 
-    // Auxiliary structure to store pointer to the buffer
-    data_ptr_t data_ptr;
-
-    data_ptr.buf = (buf_dtype *) origin_addr;
-    data_ptr.root = myrank;
-    data_ptr.wid = wid;
-
+    // Root process in window ptr doesn't contain bcast buffer.
+    // Therefore 
     auto t5 = MPI_Wtime();
     std::cout << myrank << "R WHOLE NO LOOP " << t5 - t1 << std::endl;
 
-    put_loop(req, data_ptr, myrank, nproc, sp->get_reqwin(), sp->get_datawin());
+    put_loop(req, (buf_dtype *) origin_addr, myrank, myrank, nproc, 
+            sp->get_reqwin(), sp->get_datawin(), win, wid);
 
     return RET_CODE_SUCCESS;
 }
@@ -321,19 +337,23 @@ void waiter_c::waiter_loop()
 #endif
                 auto t5 = MPI_Wtime();
 
-                // put_loop(req_read[rank], data_read.get(), myrank, nproc, 
-                //          req_raw_win, data_raw_win);
+                // Search for bcast window id in the windows list
+                // std::shared_ptr<MPI_Win> bcast_win;
+                winlist_item_t bcast_winlist_item;
+                auto isfound = find_win(data_sptr[rank].wid, 
+                                        bcast_winlist_item);
 
-                // Auxiliary structure to store pointer to the buffer
-                data_ptr_t data_ptr;
-
-                data_ptr.buf = data_sptr[rank].buf;
-                data_ptr.root = data_sptr[rank].root;
-                data_ptr.wid = data_sptr[rank].wid;
+                if (isfound == false) {
+                    std::cerr << "Window " << data_sptr[rank].wid 
+                              << " was not found" << std::endl;
+                    MPI_Abort(MPI_COMM_WORLD, RET_CODE_ERROR);
+                }
 
                 // Put request to all next peers
-                put_loop(req_read[rank], data_ptr, myrank, nproc, 
-                         req_raw_win, data_raw_win);
+                put_loop(req_read[rank], (buf_dtype *) bcast_winlist_item.bufptr.get(), 
+                         myrank, data_sptr[rank].root, nproc, 
+                         req_raw_win, data_raw_win, *bcast_winlist_item.win_sptr,
+                         data_sptr[rank].wid);
 
                 auto t6 = MPI_Wtime();
                 std::cout << myrank << "R PUTLOOP " << t6 - t5 << std::endl;
@@ -342,23 +362,25 @@ void waiter_c::waiter_loop()
                 
                 // Search for bcast window id in the windows list
                 // std::shared_ptr<MPI_Win> bcast_win;
-                winlist_item_t item;
-                auto isfound = find_win(data_sptr[rank].wid, item);
+                // winlist_item_t found_win;
+                // auto isfound = find_win(data_sptr[rank].wid, found_win);
 
-                if (isfound == false) {
-                    std::cerr << "Window " << data_sptr[rank].wid
-                              << " was not found" << std::endl;
-                    MPI_Abort(MPI_COMM_WORLD, RET_CODE_ERROR);
-                }
+                // if (isfound == false) {
+                //     std::cerr << "Window " << data_sptr[rank].wid
+                //               << " was not found" << std::endl;
+                //     MPI_Abort(MPI_COMM_WORLD, RET_CODE_ERROR);
+                // }
 
                 auto t7 = MPI_Wtime();
                 std::cout << myrank << "R FIND " << t7 - t6 << std::endl;
 
-                memcpy(item.bufptr.get(), data_sptr[rank].buf, req_read[rank].bufsize);
+                // memcpy(bcast_winlist_item.bufptr.get(), data_sptr[rank].buf, 
+                //        req_read[rank].bufsize);
 
                 auto t9 = MPI_Wtime();
                 std::cout << myrank << "R CPY " << t9 - t7 << std::endl;
 
+                // Increment finalization counter on root
                 auto donecntr_win = donecntr_win_g.get_win();
                 RMA_Lock_guard lock_root(data_sptr[rank].root, donecntr_win);
 

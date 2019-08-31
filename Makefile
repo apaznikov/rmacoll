@@ -5,7 +5,7 @@ PROG_OBJ=$(PROG).o broadcast_linear.o broadcast_binomial.o rmautils.o
 INCLUDE_PATH=./
 
 CXX=mpicxx
-CXXFLAGS=-Wall -std=c++17 -I$(INCLUDE_PATH) -pthread \
+CXXFLAGS=-Wall -std=c++17 -O3 -I$(INCLUDE_PATH) -pthread \
 		 -lboost_system -lboost_date_time -lboost_thread \
 		 -L/usr/lib64
 

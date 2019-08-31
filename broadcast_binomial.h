@@ -58,8 +58,8 @@ using buf_dtype = int;
     
 // Data for operation
 struct data_t {
-    // Buffer to put/get
-    buf_dtype buf[BUFCOUNT];
+    // // Buffer to put/get
+    // buf_dtype buf[BUFCOUNT];
 
     // Root (for collectives with root)
     int root = -1;
@@ -72,8 +72,8 @@ const auto req_size = sizeof(req_t);
 const auto data_t_size = sizeof(data_t);
 
 // Offsets for RMA operations
-const MPI_Aint offset_buf = offsetof(data_t, buf);
-const MPI_Aint offset_root_wid = offsetof(data_t, root);
+// const MPI_Aint offset_buf = offsetof(data_t, buf);
+// const MPI_Aint offset_root_wid = offsetof(data_t, root);
 
 const auto root_wid_size = sizeof(data_t::root) + sizeof(data_t::wid);
 
