@@ -17,6 +17,8 @@
 #include "broadcast_linear.h"
 #include "broadcast_binomial.h"
 
+int iter = 0;
+
 // Avoid global pointer to waiter?
 extern std::weak_ptr<waiter_c> waiter_weak_ptr;
 
@@ -34,29 +36,38 @@ std::function<int(const void*, int, MPI_Datatype, MPI_Aint,
 using bcast_buf_t = int;
 const auto bcast_root = 0;
 
-// For tests
-// const auto bcast_buf_size_min = 100'000;
-// const auto bcast_buf_size_max = 2'000'000;
-// const auto bcast_buf_size_step = 100'000;
+// #define _SIZE_TEST
+// #define _SIZE_DEBUG
+#define _SIZE_BENCH
+
+// For benchmarks
+#if defined _SIZE_BENCH
+const auto bcast_buf_size_min = 500'000;
+const auto bcast_buf_size_max = 10'000'000;
+const auto bcast_buf_size_step = 500'000;
+const auto warmup_flag = true;
+const auto warmup_ntimes = 5;
+const auto ntimes = 10;
 
 // For light test
-// const auto bcast_buf_size_min = 5'000'000;
-// const auto bcast_buf_size_max = 5'000'000;
-// const auto bcast_buf_size_step = 100'000;
-// const auto warmup_flag = true;
-// const auto warmup_ntimes = 5;
-// 
-// const auto ntimes = 10;
+#elif defined _SIZE_TEST
+const auto bcast_buf_size_min = 5'000'000;
+const auto bcast_buf_size_max = 5'000'000;
+const auto bcast_buf_size_step = 100'000;
+const auto warmup_flag = true;
+const auto warmup_ntimes = 0;
+const auto ntimes = 50;
 
 // For debug
+#elif defined _SIZE_DEBUG
 #define _DEBUG
 const auto bcast_buf_size_min = 10;
 const auto bcast_buf_size_max = 10;
 const auto bcast_buf_size_step = 10;
 const auto warmup_flag = false;
 const auto warmup_ntimes = 0;
-
-const auto ntimes = 1;
+const auto ntimes = 10;
+#endif
 
 const auto bcast_val = 100;
 
@@ -132,11 +143,18 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
             }
         }
 
-        auto tbegin = MPI_Wtime();
+        double tsum = 0;
 
         for (auto i = 0; i < ntimes; i++) {
 
+#ifdef _DEBUG
+            if (myrank == root)
+                std::fill(bcast_buf.begin(), bcast_buf.end(), (i + 1) * 10);
+#endif
+
             auto ti1 = MPI_Wtime();
+
+            iter = i;
 
             if (myrank == root) {
                 bcast_func(bcast_buf.data(), scoped_win.get_count(), MPI_INT, 0,
@@ -146,29 +164,33 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
             }
 
             // If binomial broadcast, call flush
-            if (bcast_type == binomial) {
-                if (myrank == root)  {
-                    // auto t1 = MPI_Wtime();
-
+            if (myrank == root)  {
+                if (bcast_type == binomial) {
                     RMA_Bcast_flush();
-
-                    // auto t2 = MPI_Wtime();
-                    // std::cout << "i = " << i << " FLUSH " << t2 - t1 
-                    //           << std::endl;
                 }
+
+                auto ti2 = MPI_Wtime();
+                auto titer = ti2 - ti1;
+                tsum += titer;
+                std::cout << "i = " << i << " " << titer << std::endl;
             } 
 
-            if (myrank == root) {
-                auto ti2 = MPI_Wtime();
-                std::cout << "i = " << i << " " << ti2 - ti1 << std::endl
-                          << std::endl;
+            MPI_Barrier(comm);
+
+#ifdef _DEBUG
+            if (myrank != root) {
+                usleep((myrank + 1) * 50000);
+                std::cout << myrank << "R AFTER\t";
+                for (auto i = 0; i < bcast_buf_size; i++)
+                    std::cout << raw_ptr[i] << " ";
+                std::cout << std::endl;
             }
-            
+            MPI_Barrier(comm);
+#endif
         }
 
         if (myrank == root) {
-            auto tend = MPI_Wtime();
-            auto tavg = (tend - tbegin) / ntimes;
+            auto tavg = tsum / ntimes;
             auto bcast_type_str = bcast_type == linear ? "linear": "binomial";
             std::cout << "Elapsed time (nproc = "
                       << nproc << ", bufsize = " << bcast_buf_size 
@@ -177,18 +199,6 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
 
             datafile << bcast_buf_size << "\t" << tavg << std::endl;
         }
-
-        MPI_Barrier(comm);
-
-#ifdef _DEBUG
-        if (myrank != root) {
-            usleep((myrank + 1) * 50000);
-            std::cout << myrank << "R AFTER\t";
-            for (auto i = 0; i < bcast_buf_size; i++)
-                std::cout << raw_ptr[i] << " ";
-            std::cout << std::endl;
-        }
-#endif
     }
 
     datafile.close();
