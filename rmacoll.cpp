@@ -75,24 +75,41 @@ const auto bcast_val = 100;
 void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func, 
                         int root, MPI_Comm comm)
 {
-    // Prepare file for output data
-    std::ofstream datafile;
-    if (myrank == root) {
-        auto nproc = 0;
-        MPI_Comm_size(comm, &nproc);
-        std::stringstream ss;
-        if (bcast_type == linear)
-            ss << "results/linear-n" << nproc << ".dat";
-        else
-            ss << "results/binomial-n" << nproc << ".dat";
+    auto myrank = 0;
+    MPI_Comm_rank(comm, &myrank);
 
-        datafile.open(ss.str());
-        datafile << "size\ttime\n";
+    auto nproc = 0;
+    MPI_Comm_size(comm, &nproc);
+
+    std::ofstream nprocfile;
+    std::stringstream ss;
+    std::string algname;
+
+    // Prepare output file (time on bufsize) on root
+    if (myrank == root) {
+        if (bcast_type == linear)
+            algname = "linear";
+        else
+            algname = "binomial";
+
+        ss << "results/" << algname << "-n" << nproc << ".dat";
+
+        nprocfile.open(ss.str());
+        nprocfile << "size\ttime\n";
     }
 
     for (auto bcast_buf_size = bcast_buf_size_min;
          bcast_buf_size <= bcast_buf_size_max;
          bcast_buf_size += bcast_buf_size_step) { 
+
+        // Prepare output file (time on nproc) on root
+        std::fstream bufsizefile;
+        if (myrank == root) {
+            ss.str("");
+            ss << "results/" << algname << "-d" << bcast_buf_size << ".dat";
+            std::cout << "open file " << ss.str() << std::endl;
+            bufsizefile.open(ss.str(), std::ios::out | std::ios::app);
+        }
 
         // Allocate and init memory for bcast ("to buf" -- on all procs)
         bcast_buf_t *raw_ptr = nullptr;
@@ -106,16 +123,13 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
         // Create RMA window (all proc - to recv)
         RMA_Win_guard<bcast_buf_t> scoped_win(sptr, bcast_buf_size, 
                                               MPI_COMM_WORLD);
-
-        auto myrank = 0;
-        MPI_Comm_rank(comm, &myrank);
         
+#ifdef _DEBUG
         if (myrank != root) {
             usleep((myrank + 1) * 50000);
-#ifdef _DEBUG
             std::cout << myrank << "R BEFORE\t" << raw_ptr[0] << std::endl;
-#endif
         }
+#endif
 
         // Create and init buf for bcast ("from buf" - on root)
         auto bcast_buf_alloc_size = bcast_buf_size;
@@ -197,11 +211,14 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
                       << " bcast_type = " << bcast_type_str << "): " 
                       << tavg << std::endl;
 
-            datafile << bcast_buf_size << "\t" << tavg << std::endl;
+            nprocfile << bcast_buf_size << "\t" << tavg << std::endl;
+
+            bufsizefile << nproc << "\t" << tavg << std::endl;
+            bufsizefile.close();
         }
     }
 
-    datafile.close();
+    nprocfile.close();
 }
 
 // test_rmacoll_nroot: Test RMA collectives (multiple root)

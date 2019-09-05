@@ -2,7 +2,7 @@
 
 TASKJOB=slurm.job
 
-NNODES=4
+NNODES=6
 
 BCAST_TYPES="linear binomial"
 
@@ -14,7 +14,8 @@ elif [ -x "$(command -v qsub)" ]; then
     batch=torque
 fi
 
-[ ! -d "results" ] && mkdir results
+rm -rf results
+mkdir results
 
 for ((nnodes = 1; nnodes <= NNODES; nnodes++)); do
     for bcast_type in $BCAST_TYPES; do

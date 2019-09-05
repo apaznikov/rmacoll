@@ -5,21 +5,38 @@ BCAST_TYPES="linear binomial"
 
 cd results
 
-[ ! -d "graphs" ] && mkdir graphs
+rm -rf graphs
+mkdir graphs
 
-for ((nproc = 1; nproc <= NPROC; nproc++)); do
-    flag="yes"
-    for bcast_type in $BCAST_TYPES; do
-        if [ ! -f $bcast_type-n$nproc.dat ]; then
-            flag="no"
-        fi
-    done
+#
+# Graphs of time on process number
+#
 
-    if [ $flag == "yes" ]; then
-        echo $nproc
-        cat ../datasize.gp.tmpl | sed "s/%%NPROC%%/$nproc/g" >datasize.gp.tmp
-        gnuplot datasize.gp.tmp
-    fi
+datasizes=`ls binomial-d* | sed "s/[a-z]*-d//" | sed "s/.dat//"`
+
+for datasize in $datasizes; do
+    echo "build for datasize $datasize"
+    cat ../graph.gp.tmpl | sed "s/%%PARAM%%/$datasize/g" | 
+                           sed "s/%%TYPE%%/nproc/g" | 
+                           sed "s/%%X_SYMB%%/d/g" |
+                           sed "s/%%XTICS%%/set xtics 8/" >graph.gp.tmp
+    gnuplot graph.gp.tmp
 done
 
-rm datasize.gp.tmp
+#
+# Graphs of time on buffer size
+#
+
+nprocs=`ls binomial-n* | sed "s/binomial-n"// | sed "s/.dat//"`
+
+for nproc in $nprocs; do
+    echo "build for nproc $nproc"
+
+    cat ../graph.gp.tmpl | sed "s/%%PARAM%%/$nproc/g" | 
+                           sed "s/%%TYPE%%/datasize/g" | 
+                           sed "s/%%X_SYMB%%/n/g" |
+                           sed "s/%%XTICS%%//" >graph.gp.tmp
+    gnuplot graph.gp.tmp
+done
+
+# rm graph.gp.tmp

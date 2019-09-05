@@ -1,8 +1,10 @@
 #set term pngcairo transparent enhanced font "Times,26" size 1200,800
-set term pngcairo enhanced font "Times,24" size 1200,800
-set xlabel "datasize, nelem" 
-set ylabel "time" 
-set output "graphs/datasize-n%%NPROC%%.png"
+#set term pngcairo enhanced font "Times,24" size 1200,800
+set term pngcairo enhanced font "Cantarell,24" size 1200,800
+set xlabel "%%TYPE%%" 
+set ylabel "time, s" 
+%%XTICS%%
+set output "graphs/%%TYPE%%-%%X_SYMB%%%%PARAM%%.png"
 set key inside top left nobox
 #set key outside bmargin nobox
 #set nokey
@@ -11,9 +13,9 @@ set border lw 3
 set grid lw 2.5
 set pointsize 3.0
 
-plot "binomial-n%%NPROC%%.dat" using 1:2 \
-     ti "binomial" with lp lw 4 pt 2 lc rgb '#007BCC', \
-     "linear-n%%NPROC%%.dat" using 1:2 \
+plot "binomial-%%X_SYMB%%%%PARAM%%.dat" using 1:2 \
+     ti "binomial" with lp lw 4 pt 2 lc rgb '#C40D28', \
+     "linear-%%X_SYMB%%%%PARAM%%.dat" using 1:2 \
      ti "linear" with lp dt "_" lw 4 pt 7 lc rgb '#007BCC'
 
 #     \
