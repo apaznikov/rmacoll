@@ -17,9 +17,10 @@ datasizes=`ls binomial-d* | sed "s/[a-z]*-d//" | sed "s/.dat//"`
 for datasize in $datasizes; do
     echo "build for datasize $datasize"
     cat ../graph.gp.tmpl | sed "s/%%PARAM%%/$datasize/g" | 
-                           sed "s/%%TYPE%%/nproc/g" | 
-                           sed "s/%%X_SYMB%%/d/g" |
-                           sed "s/%%XTICS%%/set xtics 8/" >graph.gp.tmp
+        sed "s/%%TYPE%%/nproc/g" | 
+        sed "s/%%X_SYMB%%/d/g" |
+        sed "s/%%XLABEL%%/Number of Processes ({\/:Italic p})/g" |
+        sed "s/%%XTICS%%/set xtics 8/" >graph.gp.tmp
     gnuplot graph.gp.tmp
 done
 
@@ -33,9 +34,10 @@ for nproc in $nprocs; do
     echo "build for nproc $nproc"
 
     cat ../graph.gp.tmpl | sed "s/%%PARAM%%/$nproc/g" | 
-                           sed "s/%%TYPE%%/datasize/g" | 
-                           sed "s/%%X_SYMB%%/n/g" |
-                           sed "s/%%XTICS%%//" >graph.gp.tmp
+        sed "s/%%TYPE%%/datasize/g" | 
+        sed "s/%%X_SYMB%%/n/g" |
+        sed "s/%%XLABEL%%/Datasize [bytes]/g" |
+        sed "s/%%XTICS%%//" >graph.gp.tmp
     gnuplot graph.gp.tmp
 done
 

@@ -1,8 +1,9 @@
 #set term pngcairo transparent enhanced font "Times,26" size 1200,800
-#set term pngcairo enhanced font "Times,24" size 1200,800
-set term pngcairo enhanced font "Cantarell,24" size 1200,800
-set xlabel "%%TYPE%%" 
-set ylabel "time, s" 
+set term pngcairo enhanced font "Times New Roman,24" size 1200,800
+#set term pngcairo enhanced font "Cantarell,24" size 1200,800
+#set term pngcairo enhanced font "Liberation Serif,24" size 1200,800
+set xlabel "%%XLABEL%%" 
+set ylabel "Latency [s]" 
 %%XTICS%%
 set output "graphs/%%TYPE%%-%%X_SYMB%%%%PARAM%%.png"
 set key inside top left nobox
@@ -14,9 +15,9 @@ set grid lw 2.5
 set pointsize 3.0
 
 plot "binomial-%%X_SYMB%%%%PARAM%%.dat" using 1:2 \
-     ti "binomial" with lp lw 4 pt 2 lc rgb '#C40D28', \
+     ti "binomial" with lp lw 4 pt 5 lc rgb '#C40D28', \
      "linear-%%X_SYMB%%%%PARAM%%.dat" using 1:2 \
-     ti "linear" with lp dt "_" lw 4 pt 7 lc rgb '#007BCC'
+     ti "linear" with lp dt "_" lw 4 pt 9 lc rgb '#007BCC'
 
 #     \
 #     "results.affinity/%%NAME%%_%%TYPE%%.dat" using 1:2 \

@@ -37,8 +37,8 @@ using bcast_buf_t = int;
 const auto bcast_root = 0;
 
 // #define _SIZE_TEST
-// #define _SIZE_DEBUG
-#define _SIZE_BENCH
+#define _SIZE_DEBUG
+// #define _SIZE_BENCH
 
 // For benchmarks
 #if defined _SIZE_BENCH
@@ -66,7 +66,7 @@ const auto bcast_buf_size_max = 10;
 const auto bcast_buf_size_step = 10;
 const auto warmup_flag = false;
 const auto warmup_ntimes = 0;
-const auto ntimes = 10;
+const auto ntimes = 5;
 #endif
 
 const auto bcast_val = 100;
@@ -102,11 +102,13 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
          bcast_buf_size <= bcast_buf_size_max;
          bcast_buf_size += bcast_buf_size_step) { 
 
+        const auto bcast_buf_size_bytes = bcast_buf_size * sizeof(bcast_buf_t);
         // Prepare output file (time on nproc) on root
         std::fstream bufsizefile;
         if (myrank == root) {
             ss.str("");
-            ss << "results/" << algname << "-d" << bcast_buf_size << ".dat";
+            ss << "results/" << algname << "-d" << bcast_buf_size_bytes 
+               << ".dat";
             std::cout << "open file " << ss.str() << std::endl;
             bufsizefile.open(ss.str(), std::ios::out | std::ios::app);
         }
@@ -138,6 +140,7 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
 
         std::vector<bcast_buf_t> bcast_buf(bcast_buf_alloc_size, bcast_val);
         MPI_Barrier(comm);
+
 
         if (warmup_flag == true) {
             for (auto i = 0; i < warmup_ntimes; i++) {
@@ -207,11 +210,11 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
             auto tavg = tsum / ntimes;
             auto bcast_type_str = bcast_type == linear ? "linear": "binomial";
             std::cout << "Elapsed time (nproc = "
-                      << nproc << ", bufsize = " << bcast_buf_size 
+                      << nproc << ", bufsize = " << bcast_buf_size_bytes 
                       << " bcast_type = " << bcast_type_str << "): " 
                       << tavg << std::endl;
 
-            nprocfile << bcast_buf_size << "\t" << tavg << std::endl;
+            nprocfile << bcast_buf_size_bytes << "\t" << tavg << std::endl;
 
             bufsizefile << nproc << "\t" << tavg << std::endl;
             bufsizefile.close();
@@ -326,7 +329,7 @@ int main(int argc, char *argv[])
                                    MPI_COMM_WORLD);
                 // test_rmacoll_nroot(&RMA_Bcast_binomial, MPI_COMM_WORLD);
                 
-                usleep(200000);
+                // usleep(200000);
             } else if (bcast_type == linear) {
                 test_rmacoll_1root(RMA_Bcast_linear, bcast_root, 
                                    MPI_COMM_WORLD);

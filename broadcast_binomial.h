@@ -42,40 +42,34 @@ int RMA_Bcast_flush();
 // RMA_Bcast_test: Test if RMA bcast is done
 int RMA_Bcast_test(bool &done);
 
-// Default buffer size
-const auto BUFCOUNT = 10'000'000;
-
 // Operation request 
 struct req_t {
     enum op_t { noop = 0, bcast = 1, resize = 2 };
     op_t op;
-    
-    // Buf size for current message (in bytes)
-    int bufsize;
 };
 
 using buf_dtype = int;
     
-// Data for operation
-struct data_t {
-    // // Buffer to put/get
-    // buf_dtype buf[BUFCOUNT];
-
+// Description of the operations
+struct descr_t {
     // Root (for collectives with root)
     int root = -1;
+
+    // Buf size for current message (in bytes)
+    int bufsize;
 
     // RMA window's id
     win_id_t wid = MPI_WIN_NO_ID;
 };
 
 const auto req_size = sizeof(req_t);
-const auto data_t_size = sizeof(data_t);
+const auto descr_t_size = sizeof(descr_t);
 
 // Offsets for RMA operations
 // const MPI_Aint offset_buf = offsetof(data_t, buf);
 // const MPI_Aint offset_root_wid = offsetof(data_t, root);
 
-const auto root_wid_size = sizeof(data_t::root) + sizeof(data_t::wid);
+const auto root_wid_size = sizeof(descr_t::root) + sizeof(descr_t::wid);
 
 // Class for waiter thread for binomial broadcast
 class waiter_c
@@ -104,8 +98,8 @@ public:
         // Init RMA window with array of requests
         req_win_g.init(nproc, comm);
 
-        // Init RMA window with array of data
-        data_win_g.init(nproc, comm);
+        // Init RMA window with array of descriptions
+        descr_win_g.init(nproc, comm);
 
         // Init RMA window for complete flags
         // doneflag_win_g.init(nproc, comm);
@@ -115,21 +109,11 @@ public:
 
         set_donecntr(nproc - 1);
 
-        // set_doneflags(true);
-
         set_ops();
 
         waiter_thr = boost::scoped_thread<>(boost::thread
                 (&waiter_c::waiter_loop, this));
     }
-
-    // void set_doneflags(bool val)
-    // {
-    //     auto doneflag_arr = doneflag_win_g.get_ptr();
-    //     for (auto rank = 0; rank < nproc; rank++)
-    //         doneflag_arr[rank] = val;
-    //     doneflag_arr[myrank] = true;
-    // }
 
     // set_donecntr: Set done counter to val
     void set_donecntr(int val)
@@ -146,7 +130,7 @@ public:
     // get_datawin: get window for request
     MPI_Win &get_datawin()
     {
-        return data_win_g.get_win();
+        return descr_win_g.get_win();
     }
 
     // get_opwin: get window for operation request
@@ -197,10 +181,7 @@ private:
     RMA_Win_guard<req_t> req_win_g;
 
     // Window for data (buffer + info)
-    RMA_Win_guard<data_t> data_win_g;
-
-    // Array of complete flags
-    // RMA_Win_guard<bool> doneflag_win_g;
+    RMA_Win_guard<descr_t> descr_win_g;
 
     // Counter of completed processes
     RMA_Win_guard<int> donecntr_win_g;
