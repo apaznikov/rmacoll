@@ -1,6 +1,6 @@
 PROG=rmacoll
 
-PROG_OBJ=$(PROG).o broadcast_linear.o broadcast_binomial.o rmautils.o 
+PROG_OBJ=$(PROG).o broadcast_linear.o broadcast_binomial.o broadcast_binomial_shmem.o rmautils.o 
 
 INCLUDE_PATH=./
 

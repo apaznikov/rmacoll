@@ -27,11 +27,20 @@ const auto flush_timeout  = 1000;
 extern int myrank;
 extern int nproc;
 
+// Default shmem buffer size
+const auto SHMEM_BUF_DEFSIZE = 1000;
+
 // RMA_Bcast_binomial: Binomial tree broadcast
 int RMA_Bcast_binomial(const void *origin_addr, int origin_count, 
                        MPI_Datatype origin_datatype, MPI_Aint target_disp,
                        int target_count, MPI_Datatype target_datatype,
-                       MPI_Win win, win_id_t wid, MPI_Comm comm);
+                       win_id_t wid, MPI_Comm comm);
+
+// RMA_Bcast_binomial: Binomial tree broadcast
+int RMA_Bcast_binomial_shmem(const void *origin_addr, int origin_count, 
+                             MPI_Datatype origin_datatype, MPI_Aint target_disp,
+                             int target_count, MPI_Datatype target_datatype,
+                             win_id_t wid, MPI_Comm comm);
 
 // RMA_Bcast_test: Test if RMA bcast is done
 int RMA_Bcast_test();
@@ -42,11 +51,14 @@ int RMA_Bcast_flush();
 // RMA_Bcast_test: Test if RMA bcast is done
 int RMA_Bcast_test(bool &done);
 
+// comp_srank: Compute rank relative to root
+int comp_srank(int myrank, int root, int nproc);
+
+// comp_rank: Compute rank from srank
+int comp_rank(int srank, int root, int nproc);
+
 // Operation request 
-struct req_t {
-    enum op_t { noop = 0, bcast = 1, resize = 2 };
-    op_t op;
-};
+enum req_t { noop = 0, bcast = 1, resize = 2 };
 
 using buf_dtype = int;
     
@@ -75,12 +87,15 @@ const auto root_wid_size = sizeof(descr_t::root) + sizeof(descr_t::wid);
 class waiter_c
 {
 public:
+    enum type_t { bin, bin_shmem };
+
     waiter_c() 
     {
     }
 
-    waiter_c(int mpi_thr_provided, MPI_Comm comm)
+    waiter_c(int mpi_thr_provided, MPI_Comm comm, type_t _type)
     {
+        type = _type;
         start(mpi_thr_provided, comm);
     }
 
@@ -111,8 +126,37 @@ public:
 
         set_ops();
 
-        waiter_thr = boost::scoped_thread<>(boost::thread
-                (&waiter_c::waiter_loop, this));
+        if (type == bin)
+            waiter_thr = boost::scoped_thread<>(boost::thread
+                    (&waiter_c::waiter_loop, this));
+        else { // type == bin_shmem
+            // For shared memory binomial algorithm,
+            // create new communicator and allocate shared buffer
+            MPI_Comm comm_sh;
+            MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0,
+                    MPI_INFO_NULL, &comm_sh);
+
+            int rank_sh = 0;
+            MPI_Comm_rank(comm_sh, &rank_sh);
+
+            MPI_Aint size = 0;
+            if (rank_sh == 0)
+                size = SHMEM_BUF_DEFSIZE * sizeof(buf_dtype);
+            else
+                size = 0;
+
+            MPI_Win_allocate_shared(size, sizeof(buf_dtype), MPI_INFO_NULL,
+                                    comm_sh, &shbuf, &win_sh);
+
+            // We allocate shared buffer on proc 0, 
+            // so all the rest ranks do query the address of it
+            MPI_Aint shbuf_sz = 0;
+            int disp_unit = 0;
+            MPI_Win_shared_query(win_sh, 0, &shbuf_sz, &disp_unit, &shbuf);
+
+            waiter_thr = boost::scoped_thread<>(boost::thread
+                    (&waiter_c::waiter_loop_shmem, this));
+        }
     }
 
     // set_donecntr: Set done counter to val
@@ -161,17 +205,15 @@ public:
     }
 
     ~waiter_c() {
-        // auto rank = 0;
-        // MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-        // if (rank == 9)
-        //     std::cout << rank << "R WaiterDest for " << req_win.get_id() 
-        //               << std::endl;
-
         waiter_term_flag = true;
         waiter_thr.join();
+
+        MPI_Win_free(&win_sh);
     }
 
 private:
+    type_t type;
+
     std::atomic<bool> waiter_term_flag{false};
 
     std::promise<void> ready_prom;
@@ -186,10 +228,17 @@ private:
     // Counter of completed processes
     RMA_Win_guard<int> donecntr_win_g;
 
+    // Window for binomial shmem algorithm
+    MPI_Win win_sh;
+    buf_dtype *shbuf = nullptr;
+
     boost::scoped_thread<> waiter_thr;
 
     // waiter_loop: Waiter thread on each process
     void waiter_loop();
+
+    // waiter_loop_shmem: Waiter thread on each process (for shmem algorithm)
+    void waiter_loop_shmem();
 
     int myrank, nproc;
 
@@ -197,6 +246,6 @@ private:
     {
         auto req_arr = req_win_g.get_ptr();
         for (auto rank = 0; rank < nproc; rank++)
-            req_arr[rank].op = req_t::op_t::noop;
+            req_arr[rank] = req_t::noop;
     }
 };

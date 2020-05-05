@@ -26,25 +26,31 @@ extern std::weak_ptr<waiter_c> waiter_weak_ptr;
 
 enum bcast_types_t {
     linear   = 1,
-    binomial = 2
+    binomial = 2,
+    binomial_shmem = 3
 } bcast_type = binomial;
 
 // Prototype for RMA broadcast function
 std::function<int(const void*, int, MPI_Datatype, MPI_Aint, 
-                  int, MPI_Datatype, MPI_Win, win_id_t, MPI_Comm)> RMA_Bcast;
+                  int, MPI_Datatype, win_id_t, MPI_Comm)> RMA_Bcast;
 
 using bcast_buf_t = int;
 const auto bcast_root = 0;
 
 // #define _SIZE_TEST
-#define _SIZE_DEBUG
-// #define _SIZE_BENCH
+// #define _SIZE_DEBUG
+#define _SIZE_BENCH
 
 // For benchmarks
 #if defined _SIZE_BENCH
-const auto bcast_buf_size_min = 500'000;
-const auto bcast_buf_size_max = 10'000'000;
-const auto bcast_buf_size_step = 500'000;
+// Large buf
+// const auto bcast_buf_size_min = 200'000;
+// const auto bcast_buf_size_max = 2'000'000;
+// const auto bcast_buf_size_step = 200'000;
+// Small buf
+const auto bcast_buf_size_min = 500;
+const auto bcast_buf_size_max = 10'000;
+const auto bcast_buf_size_step = 500;
 const auto warmup_flag = true;
 const auto warmup_ntimes = 5;
 const auto ntimes = 10;
@@ -148,8 +154,7 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
                 if (myrank == root) {
                     bcast_func(bcast_buf.data(), scoped_win.get_count(), 
                                MPI_INT, 0, scoped_win.get_count(), MPI_INT, 
-                               scoped_win.get_win(), scoped_win.get_id(), 
-                               MPI_COMM_WORLD);
+                               scoped_win.get_id(), MPI_COMM_WORLD);
                 }
 
                 if (bcast_type == binomial) {
@@ -176,8 +181,7 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
             if (myrank == root) {
                 bcast_func(bcast_buf.data(), scoped_win.get_count(), MPI_INT, 0,
                            scoped_win.get_count(), MPI_INT, 
-                           scoped_win.get_win(), scoped_win.get_id(), 
-                           MPI_COMM_WORLD);
+                           scoped_win.get_id(), MPI_COMM_WORLD);
             }
 
             // If binomial broadcast, call flush
@@ -275,15 +279,13 @@ void test_rmacoll_nroot(decltype(RMA_Bcast) bcast_func, int bcast_buf_size,
 
     bcast_func(bcast_buf.data(), sc_win_vec[myrank].get_count(), MPI_INT, 0,
                sc_win_vec[myrank].get_count(), MPI_INT, 
-               sc_win_vec[myrank].get_win(), sc_win_vec[myrank].get_id(), 
-               MPI_COMM_WORLD);
+               sc_win_vec[myrank].get_id(), MPI_COMM_WORLD);
 
     std::fill(bcast_buf.begin(), bcast_buf.end(), (myrank + 1) * 100);
 
     bcast_func(bcast_buf.data(), sc_win_vec[myrank].get_count(), MPI_INT, 0,
                sc_win_vec[myrank].get_count(), MPI_INT, 
-               sc_win_vec[myrank].get_win(), sc_win_vec[myrank].get_id(), 
-               MPI_COMM_WORLD);
+               sc_win_vec[myrank].get_id(), MPI_COMM_WORLD);
 
     if (myrank == 0)
         RMA_Bcast_flush();
@@ -316,20 +318,32 @@ int main(int argc, char *argv[])
                 bcast_type = linear;
             else if (std::string(argv[1]) == "binomial")
                 bcast_type = binomial;
+            else if (std::string(argv[1]) == "binomial_shmem")
+                bcast_type = binomial_shmem;
         }
 
         {
             if (bcast_type == binomial) {
                 auto waiter_sh_ptr = std::make_shared<waiter_c>
-                    (mpi_thr_provided, MPI_COMM_WORLD);
+                    (mpi_thr_provided, MPI_COMM_WORLD, waiter_c::type_t::bin);
 
                 waiter_weak_ptr = waiter_sh_ptr;
 
                 test_rmacoll_1root(&RMA_Bcast_binomial, bcast_root, 
                                    MPI_COMM_WORLD);
+
                 // test_rmacoll_nroot(&RMA_Bcast_binomial, MPI_COMM_WORLD);
                 
                 // usleep(200000);
+            } else if (bcast_type == binomial_shmem) {
+                auto waiter_sh_ptr = std::make_shared<waiter_c>
+                    (mpi_thr_provided, MPI_COMM_WORLD, 
+                     waiter_c::type_t::bin_shmem);
+
+                waiter_weak_ptr = waiter_sh_ptr;
+
+                test_rmacoll_1root(&RMA_Bcast_binomial_shmem, bcast_root, 
+                                   MPI_COMM_WORLD);
             } else if (bcast_type == linear) {
                 test_rmacoll_1root(RMA_Bcast_linear, bcast_root, 
                                    MPI_COMM_WORLD);

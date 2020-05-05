@@ -5,6 +5,8 @@
 #SBATCH --partition=release
 #SBATCH --output=stdout
 
+#export SLURM_NNODES=6
+#export SLURM_JOB_NUM_NODES=6
 export MV2_ENABLE_AFFINITY=0
 
-mpiexec ./rmacoll linear
+mpiexec ./rmacoll binomial

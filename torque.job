@@ -1,9 +1,10 @@
 #PBS -N mpitask
 #PBS -l nodes=2:ppn=8
-#PBS -l walltime=01:30:00
+#PBS -l walltime=05:00:00
+#PBS -q release
 #PBS -j oe
 #PBS -o stdout
 
 cd $PBS_O_WORKDIR
 
-mpiexec ./rmacoll
+mpiexec ./rmacoll binomial

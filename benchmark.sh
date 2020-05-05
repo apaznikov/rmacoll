@@ -2,7 +2,7 @@
 
 TASKJOB=slurm.job
 
-NNODES=6
+NNODES=12
 
 BCAST_TYPES="linear binomial"
 
