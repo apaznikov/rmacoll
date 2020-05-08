@@ -28,7 +28,7 @@ enum bcast_types_t {
     linear   = 1,
     binomial = 2,
     binomial_shmem = 3
-} bcast_type = binomial;
+} bcast_type = binomial_shmem;
 
 // Prototype for RMA broadcast function
 std::function<int(const void*, int, MPI_Datatype, MPI_Aint, 
@@ -38,8 +38,8 @@ using bcast_buf_t = int;
 const auto bcast_root = 0;
 
 // #define _SIZE_TEST
-// #define _SIZE_DEBUG
-#define _SIZE_BENCH
+#define _SIZE_DEBUG
+// #define _SIZE_BENCH
 
 // For benchmarks
 #if defined _SIZE_BENCH
@@ -72,7 +72,7 @@ const auto bcast_buf_size_max = 10;
 const auto bcast_buf_size_step = 10;
 const auto warmup_flag = false;
 const auto warmup_ntimes = 0;
-const auto ntimes = 5;
+const auto ntimes = 1;
 #endif
 
 const auto bcast_val = 100;
@@ -320,6 +320,8 @@ int main(int argc, char *argv[])
                 bcast_type = binomial;
             else if (std::string(argv[1]) == "binomial_shmem")
                 bcast_type = binomial_shmem;
+            else
+                throw std::runtime_error("Invalid argument");
         }
 
         {

@@ -83,6 +83,14 @@ const auto descr_t_size = sizeof(descr_t);
 
 const auto root_wid_size = sizeof(descr_t::root) + sizeof(descr_t::wid);
 
+struct leaders_t {
+    // True if this process is the leader in shmem communicator
+    bool isleader;
+
+    // Rank in the original communicator
+    int origrank;
+};
+
 // Class for waiter thread for binomial broadcast
 class waiter_c
 {
@@ -132,11 +140,9 @@ public:
         else { // type == bin_shmem
             // For shared memory binomial algorithm,
             // create new communicator and allocate shared buffer
-            MPI_Comm comm_sh;
-            MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0,
-                    MPI_INFO_NULL, &comm_sh);
+            MPI_Comm_split_type(comm, MPI_COMM_TYPE_SHARED, 0,
+                                MPI_INFO_NULL, &comm_sh);
 
-            int rank_sh = 0;
             MPI_Comm_rank(comm_sh, &rank_sh);
 
             MPI_Aint size = 0;
@@ -153,6 +159,33 @@ public:
             MPI_Aint shbuf_sz = 0;
             int disp_unit = 0;
             MPI_Win_shared_query(win_sh, 0, &shbuf_sz, &disp_unit, &shbuf);
+
+            // Create array with leader info
+            leaders.resize(nproc, 0);
+
+            char isleader = 0;
+
+            if (rank_sh == 0) {
+                isleader = 1;
+            }
+
+            MPI_Allgather(&isleader, 1, MPI_CHAR,
+                          leaders.data(), 1, MPI_CHAR, comm);
+
+            if (myrank == 5)
+                for (auto i = 0; i < nproc; i++) {
+                    std::cout << i << " " << int(leaders[i]) << std::endl;
+                }
+
+            // Leaders compute mapping of leaders and nodes
+            if (rank_sh == 0) {
+                for (auto rank = 0; rank < nproc; rank++) {
+                    if (leaders[rank] == 1) {
+                        leader_map.push_back(rank);
+                        nnodes++;
+                    }
+                }
+            }
 
             waiter_thr = boost::scoped_thread<>(boost::thread
                     (&waiter_c::waiter_loop_shmem, this));
@@ -231,6 +264,29 @@ private:
     // Window for binomial shmem algorithm
     MPI_Win win_sh;
     buf_dtype *shbuf = nullptr;
+
+    /////////////////////////////////////////////
+    // Fields for binomial shared algorithm
+    /////////////////////////////////////////////
+
+    // Shmem communicator
+    MPI_Comm comm_sh;
+
+    // Rank in shmem comm
+    int rank_sh = 0;
+
+    // Array of leaders
+    std::vector<char> leaders;
+
+    // Mapping of nodes and leaders (actual for leaders only)
+    // Index of an element is the node number, 
+    // value is the leader's rank
+    std::vector<int> leader_map;
+
+    // Number of nodes (actual for leaders only)
+    int nnodes = 0;
+
+    /////////////////////////////////////////////
 
     boost::scoped_thread<> waiter_thr;
 
