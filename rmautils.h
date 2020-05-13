@@ -107,29 +107,47 @@ private:
     bool locked = false;
 };
 
+// Window type
+enum wintype_t { common = 0, dynamic = 1, shmem = 2 };
+
 // RMA_Win_guard: RAII implementation for RMA windows
 template<typename T>
 class RMA_Win_guard
 {
 public:
-    // Window type
-    enum type_t { common = 0, dynamic = 1 };
 
     // init: Initialize window: allocate memory and init win
-    void init(unsigned int _count, MPI_Comm comm)
+    void init(unsigned int _count, MPI_Comm comm, wintype_t wintype = common)
     {
         count = _count;
 
         T *raw_ptr = nullptr;
         const auto bufsize = count * sizeof(T);
 
-        MPI_Alloc_mem(bufsize, MPI_INFO_NULL, &raw_ptr);
+        std::cerr << myrank << "R b 1001\n";
 
-        MPI_Win_create(raw_ptr, bufsize, disp_unit, MPI_INFO_NULL,
-                       comm, win.get());
+        // Common window
+        if (wintype == common) {
+            MPI_Alloc_mem(bufsize, MPI_INFO_NULL, &raw_ptr);
+
+            std::cerr << myrank << "R b 1002\n";
+
+            MPI_Win_create(raw_ptr, bufsize, disp_unit, MPI_INFO_NULL,
+                           comm, win.get());
+
+            std::cerr << myrank << "R b 1003\n";
+
+        // Shared memory window
+        } else if (wintype == shmem) {
+            MPI_Win_allocate_shared(bufsize, disp_unit, MPI_INFO_NULL,
+                                    comm, raw_ptr, win.get());
+                                     
+        }
 
         ptr = std::move(std::shared_ptr<T[]>(raw_ptr, 
                     [this](auto ptr) { ptr_deleter(ptr); }));
+
+        std::cerr << myrank << "R b 1004\n";
 
         add_to_list();
 
@@ -264,10 +282,15 @@ private:
     std::shared_ptr<MPI_Win> win = std::make_shared<MPI_Win>(MPI_WIN_NULL);
 
     // std::shared_ptr<MPI_Win> win = std::shared_ptr<MPI_Win>(new MPI_Win,
-    //         [](auto w) { 
-    //             // MPI_Win_free(w); 
+    //          [](auto w) { 
+    //             auto myrank = 0;
+    //             MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
+
+    //             std::cerr << myrank << "R WIN FREE\n";
+    //             MPI_Win_free(w); 
+    //             std::cerr << myrank << "R WIN FREE -- ok\n";
     //             delete w;
-    //         });
+    //          });
 
     std::shared_ptr<T[]> ptr;
 

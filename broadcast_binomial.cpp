@@ -198,7 +198,11 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
     auto t1 = MPI_Wtime();
 #endif
 
+    std::cerr << myrank << "R b 11\n";
+
     RMA_Bcast_flush();
+
+    std::cerr << myrank << "R b 12\n";
 
     auto sp = waiter_weak_ptr.lock();
 
@@ -243,8 +247,12 @@ int RMA_Bcast_binomial(const void *origin_addr, int origin_count,
               << " WHOLE NO LOOP " << t5 - t1 << std::endl;
 #endif
 
+    std::cerr << myrank << "R b 13\n";
+
     put_loop(req, descr, (buf_dtype *) origin_addr, myrank, nproc, 
             sp->get_reqwin(), sp->get_datawin(), *bcast_winlist_item.win_sptr);
+
+    std::cerr << myrank << "R b 14\n";
 
     return RET_CODE_SUCCESS;
 }
@@ -265,12 +273,7 @@ void waiter_c::waiter_loop()
     auto &descr_raw_win = descr_win_g.get_win();
 
     // Allocate and init req_read (array of operations for all procs)
-    std::shared_ptr<req_t[]> req_read_sptr(new req_t[nproc]);
-    decltype(auto) req_read = req_read_sptr.get(); // remove decltype?
-
-    for (auto rank = 0; rank < nproc; rank++) {
-        req_read[rank] = req_t::noop;
-    }
+    std::vector<req_t> req_read(nproc, req_t::noop);
 
     RMA_Lock_guard lock_all_waiters_req(req_raw_win);
     RMA_Lock_guard lock_all_waiters_descr(descr_raw_win);
@@ -299,7 +302,7 @@ void waiter_c::waiter_loop()
         // std::cout << myrank << "R MEMCPY " << t4 - t3 << std::endl;
 
         MPI_Get_accumulate(NULL, 0, MPI_BYTE, 
-                           req_read, req_arr_sz, 
+                           req_read.data(), req_arr_sz, 
                            MPI_BYTE, myrank, 0, req_arr_sz, MPI_BYTE, MPI_NO_OP,
                            req_raw_win);
 

@@ -115,29 +115,35 @@ public:
                 "Level of provided thread support must be MPI_THREAD_MULTIPLE");
         }
 
+        std::cerr << myrank << "R b 101\n";
+
         MPI_Comm_rank(comm, &myrank);
         MPI_Comm_size(comm, &nproc);
         
         // Init RMA window with array of requests
         req_win_g.init(nproc, comm);
 
+        std::cerr << myrank << "R b 102\n";
+
         // Init RMA window with array of descriptions
         descr_win_g.init(nproc, comm);
 
-        // Init RMA window for complete flags
-        // doneflag_win_g.init(nproc, comm);
+        std::cerr << myrank << "R b 103\n";
 
         // Init window for complete counter
         donecntr_win_g.init(1, comm);
+
+        std::cerr << myrank << "R b 104\n";
 
         set_donecntr(nproc - 1);
 
         set_ops();
 
-        if (type == bin)
+        if (type == bin) {
+            std::cerr << myrank << "R b 105\n";
             waiter_thr = boost::scoped_thread<>(boost::thread
                     (&waiter_c::waiter_loop, this));
-        else { // type == bin_shmem
+        } else if (type == bin_shmem) {
             // For shared memory binomial algorithm,
             // create new communicator and allocate shared buffer
             MPI_Comm_split_type(comm, MPI_COMM_TYPE_SHARED, 0,
@@ -145,20 +151,24 @@ public:
 
             MPI_Comm_rank(comm_sh, &rank_sh);
 
-            MPI_Aint size = 0;
-            if (rank_sh == 0)
-                size = SHMEM_BUF_DEFSIZE * sizeof(buf_dtype);
-            else
-                size = 0;
+            // MPI_Aint size = 0;
+            // if (rank_sh == 0)
+            //     size = SHMEM_BUF_DEFSIZE * sizeof(buf_dtype);
+            // else
+            //     size = 0;
 
-            MPI_Win_allocate_shared(size, sizeof(buf_dtype), MPI_INFO_NULL,
-                                    comm_sh, &shbuf, &win_sh);
+            win_sh_g.init(SHMEM_BUF_DEFSIZE, comm, wintype_t::shmem);
+
+            // MPI_Win_allocate_shared(size, sizeof(buf_dtype), MPI_INFO_NULL,
+            //                         comm_sh, &shbuf, &win_sh);
 
             // We allocate shared buffer on proc 0, 
             // so all the rest ranks do query the address of it
+
             MPI_Aint shbuf_sz = 0;
             int disp_unit = 0;
-            MPI_Win_shared_query(win_sh, 0, &shbuf_sz, &disp_unit, &shbuf);
+            MPI_Win_shared_query(win_sh_g.get_win(), 0, &shbuf_sz, 
+                                 &disp_unit, win_sh_g.get_ptr());
 
             // Create array with leader info
             leaders.resize(nproc, 0);
@@ -240,8 +250,6 @@ public:
     ~waiter_c() {
         waiter_term_flag = true;
         waiter_thr.join();
-
-        MPI_Win_free(&win_sh);
     }
 
 private:
@@ -262,8 +270,7 @@ private:
     RMA_Win_guard<int> donecntr_win_g;
 
     // Window for binomial shmem algorithm
-    MPI_Win win_sh;
-    buf_dtype *shbuf = nullptr;
+    RMA_Win_guard<buf_dtype> win_sh_g;
 
     /////////////////////////////////////////////
     // Fields for binomial shared algorithm

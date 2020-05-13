@@ -95,7 +95,7 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
     if (myrank == root) {
         if (bcast_type == linear)
             algname = "linear";
-        else
+        else 
             algname = "binomial";
 
         ss << "results/" << algname << "-n" << nproc << ".dat";
@@ -108,6 +108,8 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
          bcast_buf_size <= bcast_buf_size_max;
          bcast_buf_size += bcast_buf_size_step) { 
 
+        std::cerr << myrank << "R b 2\n";
+
         const auto bcast_buf_size_bytes = bcast_buf_size * sizeof(bcast_buf_t);
         // Prepare output file (time on nproc) on root
         std::fstream bufsizefile;
@@ -119,6 +121,8 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
             bufsizefile.open(ss.str(), std::ios::out | std::ios::app);
         }
 
+        std::cerr << myrank << "R b 3\n";
+
         // Allocate and init memory for bcast ("to buf" -- on all procs)
         bcast_buf_t *raw_ptr = nullptr;
         MPI_Alloc_mem(bcast_buf_size * sizeof(bcast_buf_t), 
@@ -128,9 +132,13 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
 
         std::fill_n(raw_ptr, bcast_buf_size, 0);
 
+        std::cerr << myrank << "R b 4\n";
+
         // Create RMA window (all proc - to recv)
         RMA_Win_guard<bcast_buf_t> scoped_win(sptr, bcast_buf_size, 
                                               MPI_COMM_WORLD);
+
+        std::cerr << myrank << "R b 5\n";
         
 #ifdef _DEBUG
         if (myrank != root) {
@@ -139,15 +147,19 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
         }
 #endif
 
+        std::cerr << myrank << "R b 6\n";
+
         // Create and init buf for bcast ("from buf" - on root)
         auto bcast_buf_alloc_size = bcast_buf_size;
         if (myrank != root)
             bcast_buf_alloc_size = 0;
 
+        std::cerr << myrank << "R b 7\n";
+
         std::vector<bcast_buf_t> bcast_buf(bcast_buf_alloc_size, bcast_val);
         MPI_Barrier(comm);
 
-
+        // Warmup phase
         if (warmup_flag == true) {
             for (auto i = 0; i < warmup_ntimes; i++) {
 
@@ -167,6 +179,9 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
 
         double tsum = 0;
 
+        std::cerr << myrank << "R b 8\n";
+
+        // Main measurements phase
         for (auto i = 0; i < ntimes; i++) {
 
 #ifdef _DEBUG
@@ -179,9 +194,11 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
             iter = i;
 
             if (myrank == root) {
+                std::cerr << myrank << "R b 9\n";
                 bcast_func(bcast_buf.data(), scoped_win.get_count(), MPI_INT, 0,
                            scoped_win.get_count(), MPI_INT, 
                            scoped_win.get_id(), MPI_COMM_WORLD);
+                std::cerr << myrank << "R b 10\n";
             }
 
             // If binomial broadcast, call flush
@@ -326,6 +343,8 @@ int main(int argc, char *argv[])
 
         {
             if (bcast_type == binomial) {
+                std::cerr << myrank << "R b 1\n";
+
                 auto waiter_sh_ptr = std::make_shared<waiter_c>
                     (mpi_thr_provided, MPI_COMM_WORLD, waiter_c::type_t::bin);
 
@@ -338,6 +357,8 @@ int main(int argc, char *argv[])
                 
                 // usleep(200000);
             } else if (bcast_type == binomial_shmem) {
+                std::cerr << myrank << "R sh 1\n";
+
                 auto waiter_sh_ptr = std::make_shared<waiter_c>
                     (mpi_thr_provided, MPI_COMM_WORLD, 
                      waiter_c::type_t::bin_shmem);
