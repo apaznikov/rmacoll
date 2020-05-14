@@ -83,12 +83,15 @@ static void put_loop(const req_t &req, const descr_t &descr,
 
 // RMA_Bcast_binomial: Binomial tree broadcast
 // (?) Remove MPI_Win argument?
+// TODO replace by common binomial shmem
 int RMA_Bcast_binomial_shmem(const void *origin_addr, int origin_count, 
                              MPI_Datatype origin_datatype, 
                              MPI_Aint target_disp, int target_count, 
                              MPI_Datatype target_datatype,
                              win_id_t wid, MPI_Comm comm)
 {
+    std::cerr << "DEBUG 00" << std::endl;
+
     // Wait until previous bcast is completed
     RMA_Bcast_flush();
 
@@ -126,11 +129,15 @@ int RMA_Bcast_binomial_shmem(const void *origin_addr, int origin_count,
         MPI_Abort(MPI_COMM_WORLD, RET_CODE_ERROR);
     }
 
+    std::cerr << "DEBUG 11" << std::endl;
+
     // Wait until passive synchronization epoch starts in waiter
     sp->get_fut().wait();
+    std::cerr << "DEBUG 22" << std::endl;
 
-    put_loop(req, descr, (buf_dtype *) origin_addr, myrank, nproc, 
-            sp->get_reqwin(), sp->get_datawin(), *bcast_winlist_item.win_sptr);
+    put_loop(req, descr, (buf_dtype *) origin_addr, myrank, sp->get_peer_count(), 
+             sp->get_reqwin(), sp->get_datawin(), *bcast_winlist_item.win_sptr);
+    std::cerr << "DEBUG 33" << std::endl;
 
     return RET_CODE_SUCCESS;
 }
@@ -151,12 +158,15 @@ void waiter_c::waiter_loop_shmem()
     auto &descr_raw_win = descr_win_g.get_win();
 
     // Allocate and init req_read (array of operations for all procs)
-    std::shared_ptr<req_t[]> req_read_sptr(new req_t[nproc]);
-    decltype(auto) req_read = req_read_sptr.get(); // remove decltype?
+    // TODO replace to vector
+    // std::shared_ptr<req_t[]> req_read_sptr(new req_t[peer_count]);
+    // decltype(auto) req_read = req_read_sptr.get(); // remove decltype?
 
-    for (auto rank = 0; rank < nproc; rank++) {
-        req_read[rank] = req_t::noop;
-    }
+    std::vector<req_t> req_read(nproc, req_t::noop);
+
+    // for (auto rank = 0; rank < peer_count; rank++) {
+    //     req_read[rank] = req_t::noop;
+    // }
 
     RMA_Lock_guard lock_all_waiters_req(req_raw_win);
     RMA_Lock_guard lock_all_waiters_descr(descr_raw_win);
@@ -167,10 +177,10 @@ void waiter_c::waiter_loop_shmem()
         // 1. Check request field
 
         // Atomically read (in my memory) request array for all processes 
-        const auto req_arr_sz = req_size * nproc;
+        const auto req_arr_sz = req_size * peer_count;
 
         MPI_Get_accumulate(NULL, 0, MPI_BYTE, 
-                           req_read, req_arr_sz, 
+                           req_read.data(), req_arr_sz, 
                            MPI_BYTE, myrank, 0, req_arr_sz, MPI_BYTE, MPI_NO_OP,
                            req_raw_win);
 
@@ -179,7 +189,7 @@ void waiter_c::waiter_loop_shmem()
         // 1. Look through request array and find all requests
         // 2. Get data for active requests
         // 3. Put requests to the next processes
-        for (auto rank = 0; rank < nproc; rank++) {
+        for (auto rank = 0; rank < peer_count; rank++) {
             if (req_read[rank] == req_t::bcast) {
                 req_sptr[rank] = req_t::noop;
 
@@ -196,8 +206,8 @@ void waiter_c::waiter_loop_shmem()
 
                 // Put request to all next peers
                 put_loop(req_read[rank], descr_sptr[rank], 
-                        (buf_dtype *) bcast_winlist_item.bufptr.get(), 
-                         myrank, nproc, req_raw_win, 
+                         (buf_dtype *) bcast_winlist_item.bufptr.get(), 
+                         myrank, peer_count, req_raw_win, 
                          descr_raw_win, *bcast_winlist_item.win_sptr);
 
                 // Increment finalization counter on root

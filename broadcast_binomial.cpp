@@ -39,13 +39,13 @@ int comp_rank(int srank, int root, int nproc)
 
 
 // bcast_isdone: Read and check flag array
-bool bcast_isdone(int nproc, int myrank, MPI_Win &donecntr_win)
+bool bcast_isdone(int peer_count, int myrank, MPI_Win &donecntr_win)
 {
     int read_cntr = 0;
     MPI_Fetch_and_op(NULL, &read_cntr, MPI_INT, myrank, 0, MPI_NO_OP, 
                      donecntr_win);
 
-    if (read_cntr == nproc - 1)
+    if (read_cntr == peer_count - 1)
         return true;
     else
         return false;
@@ -66,10 +66,10 @@ int RMA_Bcast_test(bool &done)
     // Atomically lock myself and read doneflag array
     RMA_Lock_guard lock_root(myrank, doneflag_win);
 
-    auto nproc = sp->get_nproc();
+    auto peer_count = sp->get_peer_count();
     auto myrank = sp->get_myrank();
 
-    done = bcast_isdone(nproc, myrank, doneflag_win);
+    done = bcast_isdone(peer_count, myrank, doneflag_win);
 
     return RET_CODE_SUCCESS;
 }
@@ -77,6 +77,8 @@ int RMA_Bcast_test(bool &done)
 // RMA_Bcast_flush: Wait until RMA_Bcast is completed
 int RMA_Bcast_flush()
 {
+    return RET_CODE_SUCCESS;
+
     auto sp = waiter_weak_ptr.lock();
 
     if (!sp) {
@@ -89,10 +91,10 @@ int RMA_Bcast_flush()
     // Atomically lock myself and read doneflag array
     RMA_Lock_guard lock_root(myrank, doneflag_win);
 
-    auto nproc = sp->get_nproc();
+    auto peer_count = sp->get_peer_count();
     auto myrank = sp->get_myrank();
 
-    while (!bcast_isdone(nproc, myrank, doneflag_win)) {
+    while (!bcast_isdone(peer_count, myrank, doneflag_win)) {
         usleep(flush_timeout);
     };
 
