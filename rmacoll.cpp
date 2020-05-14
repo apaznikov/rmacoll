@@ -95,8 +95,10 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
     if (myrank == root) {
         if (bcast_type == linear)
             algname = "linear";
-        else 
+        else if (bcast_type == binomial)
             algname = "binomial";
+        else
+            algname = "binomial_shmem";
 
         ss << "results/" << algname << "-n" << nproc << ".dat";
 
@@ -169,7 +171,8 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
                                scoped_win.get_id(), MPI_COMM_WORLD);
                 }
 
-                if (bcast_type == binomial) {
+                if ((bcast_type == binomial) || 
+                    (bcast_type == binomial_shmem)) {
                     if (myrank == root)  {
                         RMA_Bcast_flush();
                     }
@@ -184,14 +187,19 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
         // Main measurements phase
         for (auto i = 0; i < ntimes; i++) {
 
+            std::cerr << "DEBUG 111" << std::endl;
 #ifdef _DEBUG
             if (myrank == root)
                 std::fill(bcast_buf.begin(), bcast_buf.end(), (i + 1) * 10);
 #endif
 
+            std::cerr << "DEBUG 112" << std::endl;
+
             auto ti1 = MPI_Wtime();
 
             iter = i;
+
+            std::cerr << "DEBUG 113" << std::endl;
 
             if (myrank == root) {
                 std::cerr << myrank << "R b 9\n";
@@ -203,8 +211,11 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
 
             // If binomial broadcast, call flush
             if (myrank == root)  {
-                if (bcast_type == binomial) {
+                if ((bcast_type == binomial) || 
+                    (bcast_type == binomial_shmem)) {
+                    std::cerr << "DEBUG 1" << std::endl;
                     RMA_Bcast_flush();
+                    std::cerr << "DEBUG 2" << std::endl;
                 }
 
                 auto ti2 = MPI_Wtime();
@@ -227,6 +238,9 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
 #endif
         }
 
+        std::cerr << "DEBUG 1000" << std::endl;
+
+        // Compute elapsed time
         if (myrank == root) {
             auto tavg = tsum / ntimes;
             auto bcast_type_str = bcast_type == linear ? "linear": "binomial";
@@ -240,6 +254,8 @@ void test_rmacoll_1root(decltype(RMA_Bcast) bcast_func,
             bufsizefile << nproc << "\t" << tavg << std::endl;
             bufsizefile.close();
         }
+
+        std::cerr << "DEBUG 1001" << std::endl;
     }
 
     nprocfile.close();
@@ -367,6 +383,8 @@ int main(int argc, char *argv[])
 
                 test_rmacoll_1root(&RMA_Bcast_binomial_shmem, bcast_root, 
                                    MPI_COMM_WORLD);
+
+                std::cerr << myrank << "R DEBUG 2000" << std::endl;
             } else if (bcast_type == linear) {
                 test_rmacoll_1root(RMA_Bcast_linear, bcast_root, 
                                    MPI_COMM_WORLD);

@@ -144,6 +144,14 @@ public:
                                      
         }
 
+        if (raw_ptr == nullptr) {
+            std::cerr << "MPI_Alloc_mem() failed" << std::endl;
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+
+        MPI_Win_create(raw_ptr, bufsize, disp_unit, MPI_INFO_NULL,
+                       comm, win.get());
+
         ptr = std::move(std::shared_ptr<T[]>(raw_ptr, 
                     [this](auto ptr) { ptr_deleter(ptr); }));
 
@@ -223,15 +231,17 @@ public:
     void free()
     {
         if (is_init == true) {
-            // auto rank = 0;
-            // MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-            // std::cerr << rank << "R RMADest " << id << std::endl;
+            auto rank = 0;
+            MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+            std::cerr << rank << "R RMADest " << id << std::endl;
 
             remove_from_list();
 
             MPI_Win_free(win.get());
             
             is_init = false;
+
+            std::cerr << rank << "R RMADest " << id << " - ok" << std::endl;
         }
     }
 
@@ -269,12 +279,13 @@ private:
     void ptr_deleter(T *ptr)
     {
         // Debug -- begin
-        // auto rank = 0;
-        // MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-        // std::cout << rank << "R deleter for ptr WID " << id << std::endl;
-        // Debug -- end
+        auto rank = 0;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        std::cerr << rank << "R deleter for ptr WID " << id << std::endl;
 
         MPI_Free_mem(ptr);
+
+        std::cerr << rank << "R deleter for ptr WID " << id << " - ok" << std::endl;
     }
 
     // std::unique_ptr<MPI_Win> win = std::make_unique<MPI_Win>(MPI_WIN_NULL);

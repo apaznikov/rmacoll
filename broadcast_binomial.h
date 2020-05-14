@@ -11,6 +11,7 @@
 #include <thread>
 #include <atomic>
 #include <future>
+#include <functional>
 
 #include <boost/thread/scoped_thread.hpp>
 
@@ -108,45 +109,52 @@ public:
     }
 
     // start: Start waiter thread for binomial broadcast
-    void start(int mpi_thr_provided, MPI_Comm comm)
+    void start(int mpi_thr_provided, MPI_Comm orig_comm)
     {
         if (mpi_thr_provided != MPI_THREAD_MULTIPLE) {
             throw std::runtime_error(
                 "Level of provided thread support must be MPI_THREAD_MULTIPLE");
         }
 
-        std::cerr << myrank << "R b 101\n";
+        // std::cerr << myrank << "R b 101\n";
 
-        MPI_Comm_rank(comm, &myrank);
-        MPI_Comm_size(comm, &nproc);
+        // MPI_Comm_rank(comm, &myrank);
+        // MPI_Comm_size(comm, &nproc);
+        // 
+        // // Init RMA window with array of requests
+        // req_win_g.init(nproc, comm);
+
+        // std::cerr << myrank << "R b 102\n";
+
+        // // Init RMA window with array of descriptions
+        // descr_win_g.init(nproc, comm);
+
+        // std::cerr << myrank << "R b 103\n";
+
+        // // Init window for complete counter
+        // donecntr_win_g.init(1, comm);
+
+        // std::cerr << myrank << "R b 104\n";
+
+        // set_donecntr(nproc - 1);
+
+        // set_ops();
+
+        // if (type == bin) {
+        //     std::cerr << myrank << "R b 105\n";
+        //     waiter_thr = boost::scoped_thread<>(boost::thread
+        //             (&waiter_c::waiter_loop, this));
+
+        MPI_Comm *comm = nullptr;
+        MPI_Comm leader_comm;
         
-        // Init RMA window with array of requests
-        req_win_g.init(nproc, comm);
-
-        std::cerr << myrank << "R b 102\n";
-
-        // Init RMA window with array of descriptions
-        descr_win_g.init(nproc, comm);
-
-        std::cerr << myrank << "R b 103\n";
-
-        // Init window for complete counter
-        donecntr_win_g.init(1, comm);
-
-        std::cerr << myrank << "R b 104\n";
-
-        set_donecntr(nproc - 1);
-
-        set_ops();
-
         if (type == bin) {
-            std::cerr << myrank << "R b 105\n";
-            waiter_thr = boost::scoped_thread<>(boost::thread
-                    (&waiter_c::waiter_loop, this));
+            // comm = orig_comm;
+            // peer_count = nproc;
         } else if (type == bin_shmem) {
             // For shared memory binomial algorithm,
             // create new communicator and allocate shared buffer
-            MPI_Comm_split_type(comm, MPI_COMM_TYPE_SHARED, 0,
+            MPI_Comm_split_type(orig_comm, MPI_COMM_TYPE_SHARED, 0,
                                 MPI_INFO_NULL, &comm_sh);
 
             MPI_Comm_rank(comm_sh, &rank_sh);
@@ -157,7 +165,7 @@ public:
             // else
             //     size = 0;
 
-            win_sh_g.init(SHMEM_BUF_DEFSIZE, comm, wintype_t::shmem);
+            win_sh_g.init(SHMEM_BUF_DEFSIZE, comm_sh, wintype_t::shmem);
 
             // MPI_Win_allocate_shared(size, sizeof(buf_dtype), MPI_INFO_NULL,
             //                         comm_sh, &shbuf, &win_sh);
@@ -179,27 +187,81 @@ public:
                 isleader = 1;
             }
 
+            // Collect info about leaders on all procs
             MPI_Allgather(&isleader, 1, MPI_CHAR,
-                          leaders.data(), 1, MPI_CHAR, comm);
+                          leaders.data(), 1, MPI_CHAR, orig_comm);
 
             if (myrank == 5)
                 for (auto i = 0; i < nproc; i++) {
                     std::cout << i << " " << int(leaders[i]) << std::endl;
                 }
 
-            // Leaders compute mapping of leaders and nodes
-            if (rank_sh == 0) {
+            // if (rank_sh == 0) {
+                // Group of orig communicator and group of leaders
+                MPI_Group orig_group, leader_group;
+                MPI_Comm_group(orig_comm, &orig_group);
+
+                // Mapping of leaders and nodes
+                // (index is node, value is the rank)
                 for (auto rank = 0; rank < nproc; rank++) {
                     if (leaders[rank] == 1) {
                         leader_map.push_back(rank);
+
                         nnodes++;
                     }
                 }
-            }
 
+                // Add to the new group of leaders
+                MPI_Group_incl(leader_group, leader_map.size(), 
+                               leader_map.data(), &leader_group);
+
+                MPI_Comm_create(orig_comm, leader_group, &leader_comm);
+
+                comm = &leader_comm;
+                // peer_count = nnodes;
+            // }
+            // peer_count = nproc;
+
+            // waiter_func = &waiter_c::waiter_loop_shmem;
+
+        } else {
+            goto _err_lbl;
+        }
+
+        MPI_Comm_rank(*comm, &myrank);
+
+        MPI_Comm_size(*comm, &nproc);
+
+        // Init RMA window with array of requests
+        req_win_g.init(nproc, *comm);
+
+        // Init RMA window with array of descriptions
+        descr_win_g.init(nproc, *comm);
+
+        // Init window for complete counter
+        donecntr_win_g.init(1, *comm);
+
+        set_donecntr(nproc - 1);
+
+        // Init op array by no_op
+        set_ops();
+
+        // Start broadcaster thread
+        if (type == bin) {
+            waiter_thr = boost::scoped_thread<>(boost::thread
+                    (&waiter_c::waiter_loop, this));
+        } else if (type == bin_shmem) {
             waiter_thr = boost::scoped_thread<>(boost::thread
                     (&waiter_c::waiter_loop_shmem, this));
+        } else {
+            goto _err_lbl;
         }
+
+        return;
+        
+        _err_lbl:
+            std::cerr << "Invalid algorithm type" << std::endl;
+            MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
     // set_donecntr: Set done counter to val
@@ -242,6 +304,11 @@ public:
         return nproc;
     }
 
+    int get_peer_count()
+    {
+        return peer_count;
+    }
+
     int get_myrank()
     {
         return myrank;
@@ -268,6 +335,11 @@ private:
 
     // Counter of completed processes
     RMA_Win_guard<int> donecntr_win_g;
+
+    // Size of req, descr arrays
+    // For binomial it equals nproc
+    // For binomial shmem is equals nnodes
+    int peer_count = 1;
 
     // Window for binomial shmem algorithm
     RMA_Win_guard<buf_dtype> win_sh_g;
